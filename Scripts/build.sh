@@ -12,13 +12,29 @@ build="$root/build"
 app="$build/Clio.app"
 target="arm64-apple-macosx14.0"
 
+# From the macOS 27 SDK on, SwiftUI's @State is a macro whose plugin ships only
+# with Xcode. Under Command Line Tools alone, the newest SDK without it is used.
+declares_state_macro() {
+    grep -qs StateMacro "$1"/System/Library/Frameworks/SwiftUICore.framework/Modules/SwiftUICore.swiftmodule/*.swiftinterface
+}
+sdk="$(xcrun --show-sdk-path)"
+if [[ "$sdk" == /Library/Developer/CommandLineTools/* ]] && declares_state_macro "$sdk"; then
+    for candidate in $(printf '%s\n' "$(dirname "$sdk")"/MacOSX*.*.sdk | sort -rV); do
+        if ! declares_state_macro "$candidate"; then
+            echo "Command Line Tools 不含 SwiftUI 宏插件，改用 $(basename "$candidate")"
+            sdk="$candidate"
+            break
+        fi
+    done
+fi
+
 mkdir -p "$build"
 rm -rf "$app"
 
 echo "编译…"
 swiftc \
     -target "$target" \
-    -sdk "$(xcrun --show-sdk-path)" \
+    -sdk "$sdk" \
     -swift-version 5 \
     -O \
     -o "$build/Clio" \
