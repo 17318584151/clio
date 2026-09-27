@@ -6,22 +6,18 @@ import Foundation
 /// `get_usage` request with, plus the time it was fetched, and Claude Code
 /// refreshes it while it runs. Reading the file costs nothing, so it is the
 /// first source tried; the CLI is asked only on the slower schedule.
-///
-/// The block under `juniper_tide` is the weekly session-limit reset that the
-/// terminal offers as `/limit-reset`. It is null unless the account is in that
-/// experiment.
 enum ClaudeConfigReader {
     private static var path: URL {
         FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude.json")
     }
 
-    static func read() -> (limits: RateLimitSnapshot, counter: QuotaCounter?)? {
+    static func read() -> RateLimitSnapshot? {
         guard let data = try? Data(contentsOf: path) else { return nil }
         return parse(data)
     }
 
     /// Split from the file read so a payload can be checked on its own.
-    static func parse(_ data: Data) -> (limits: RateLimitSnapshot, counter: QuotaCounter?)? {
+    static func parse(_ data: Data) -> RateLimitSnapshot? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let cached = root["cachedUsageUtilization"] as? [String: Any],
               let utilization = cached["utilization"] as? [String: Any]
@@ -36,7 +32,7 @@ enum ClaudeConfigReader {
         if snapshot.modelScoped.isEmpty {
             snapshot.modelScoped = scopedFromLimits(utilization["limits"])
         }
-        return (snapshot, resetCounter(utilization["juniper_tide"]))
+        return snapshot
     }
 
     private static func scopedFromLimits(_ value: Any?) -> [ScopedRateLimitWindow] {
@@ -52,21 +48,5 @@ enum ClaudeConfigReader {
                                              ?? (entry["percent"] as? Int).map(Double.init),
                                          resetsAt: (entry["resets_at"] as? String).flatMap(ISO8601.date(from:)))
         }
-    }
-
-    /// "剩余重置次数 1 / 1" — the session-limit resets this week that are still
-    /// unspent. The server fills this block only for a request made while the
-    /// session limit is actually reached, so it is absent most of the time.
-    private static func resetCounter(_ value: Any?) -> QuotaCounter? {
-        guard let block = value as? [String: Any] else { return nil }
-        // An account outside the offer still gets a block, marked as such.
-        if block["eligible"] as? Bool == false { return nil }
-        if let arm = block["arm"] as? String, arm == "ineligible" || arm == "unavailable" { return nil }
-        let perWeek = (block["resets_per_week"] as? Int) ?? 1
-        guard perWeek > 0 else { return nil }
-        let available = block["available"] as? Bool ?? false
-        return QuotaCounter(title: "剩余重置次数",
-                            value: "\(available ? perWeek : 0)",
-                            suffix: "/ \(perWeek)")
     }
 }

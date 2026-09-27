@@ -151,14 +151,6 @@ struct QuotaWindow {
     }
 }
 
-/// A plain label/value line under the quota bars — the design's remaining
-/// resets counter. Nothing local records it, so it is filled from Settings.
-struct QuotaCounter {
-    let title: String
-    let value: String
-    let suffix: String?
-}
-
 /// Everything one tool's screen needs.
 struct ToolSnapshot {
     let tool: Tool
@@ -167,7 +159,6 @@ struct ToolSnapshot {
     let week: QuotaWindow
     /// A per-model allowance shown beneath the two windows, when configured.
     let modelQuota: QuotaWindow?
-    let counter: QuotaCounter?
     let totals: [Granularity: TokenCounts]
     let costs: [Granularity: Double]
     /// Change against the preceding period of the same length.

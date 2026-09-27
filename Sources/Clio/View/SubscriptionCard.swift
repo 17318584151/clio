@@ -9,8 +9,7 @@ private struct QuotaTip {
     var y: CGFloat
 }
 
-/// The quota block: two rolling windows, an optional per-model allowance, and
-/// an optional counter line.
+/// The quota block: two rolling windows and an optional per-model allowance.
 ///
 /// A window with no reported utilisation shows the tokens it has actually
 /// consumed and when it resets. The percentage and its bar appear only once the
@@ -45,9 +44,6 @@ struct SubscriptionCard: View {
             QuotaRow(window: snapshot.week, onTip: { tip = $0 })
             if let modelQuota = snapshot.modelQuota {
                 QuotaRow(window: modelQuota, onTip: { tip = $0 })
-            }
-            if let counter = snapshot.counter {
-                CounterRow(counter: counter)
             }
         }
         .coordinateSpace(name: Self.space)
@@ -140,32 +136,5 @@ private struct QuotaRow: View {
         return Text("按当前速率约 ")
             + Text(Format.duration(projected)).fontWeight(.semibold)
             + Text("后耗尽")
-    }
-}
-
-private struct CounterRow: View {
-    @Environment(\.theme) private var theme
-    var counter: QuotaCounter
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(counter.title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(theme.textPrimary)
-            Spacer()
-            HStack(spacing: 3) {
-                Text(counter.value)
-                    .font(.system(size: 12, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(theme.textPrimary)
-                if let suffix = counter.suffix {
-                    Text(suffix)
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textSecondary)
-                }
-            }
-        }
-        .frame(height: 17)
-        .padding(.top, 10)
     }
 }

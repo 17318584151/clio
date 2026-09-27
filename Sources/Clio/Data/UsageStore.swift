@@ -113,7 +113,7 @@ final class UsageStore: ObservableObject {
         let config = ClaudeConfigReader.read()
         // Fresh enough to trust: two polling periods, so raising the interval
         // in Settings doesn't make the panel drop the percentages in between.
-        let liveLimits = RateLimitSnapshot.merged([lastProbeResult, feed, config?.limits].compactMap { $0 },
+        let liveLimits = RateLimitSnapshot.merged([lastProbeResult, feed, config].compactMap { $0 },
                                                   now: Date(),
                                                   maxAge: prefs.quotaInterval * 2)
         rateLimits = liveLimits
@@ -126,8 +126,7 @@ final class UsageStore: ObservableObject {
                 // The tier Claude Code records locally, unless overridden.
                 planName: (configured?.isEmpty == false ? configured : nil)
                     ?? (tool == .claudeCode ? PlanReader.claudeCodePlan() : nil),
-                rateLimits: tool == .claudeCode ? liveLimits : nil,
-                counter: tool == .claudeCode ? config?.counter : nil
+                rateLimits: tool == .claudeCode ? liveLimits : nil
             )
         }
 

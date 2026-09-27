@@ -56,7 +56,7 @@ macOS 菜单栏里的 Claude Code / Codex 用量面板：额度还剩多少、�
 
 三条来源，可同时生效，合并时取较新的一份。
 
-**读配置缓存**（默认，无需配置，最省）。Claude Code 在运行时会把额度写进 `~/.claude.json` 的 `cachedUsageUtilization`，带 `fetchedAtMs` 时间戳，通常只落后一两分钟。读一个 JSON 文件不起任何进程，所以它是首选来源；它同时也是「剩余重置次数」唯一的出处。
+**读配置缓存**（默认，无需配置，最省）。Claude Code 在运行时会把额度写进 `~/.claude.json` 的 `cachedUsageUtilization`，带 `fetchedAtMs` 时间戳，通常只落后一两分钟。读一个 JSON 文件不起任何进程，所以它是首选来源。
 
 **主动查询**（默认，无需配置）。向 Claude Code 发一条 `get_usage` 控制请求：
 
@@ -148,7 +148,6 @@ Clio --snapshot <目录>   # 把每个界面渲染成 PNG
 ## 已知限制
 
 - 热力图更早的部分取自 `~/.claude/stats-cache.json`，那是 Claude Code 自己的统计缓存：转录文件默认只保留 30 天（由 `cleanupPeriodDays` 控制），这份缓存留得更久。它按需重算而非持续写入，所以未必覆盖最近几天，按模型 token 也只回溯到该字段加入之后。合并时以扫描结果为准，缓存只填空缺。
-- 「剩余重置次数」取自配置缓存里的 `juniper_tide` 块（`available` 与 `resets_per_week`），对应终端里 `/limit-reset` 那条提示。这是一项灰度功能，账号不在灰度里时该块为 null，这一行就不显示。
 - 今日活跃是推算值：日志只记录每次回复的时间点，没有会话时长。
 - Codex 的日志不记会话标识，那一侧的会话数会算作一个。
 - 「开机自启」需要正式签名，ad-hoc 构建下注册会失败，开关会自己弹回关闭。

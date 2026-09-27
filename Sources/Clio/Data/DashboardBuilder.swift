@@ -7,9 +7,6 @@ enum DashboardBuilder {
         var planName: String?
         /// Real utilisation, from whichever source reported it most recently.
         var rateLimits: RateLimitSnapshot?
-        /// The weekly session-limit resets still unspent, when the account has
-        /// that offer at all.
-        var counter: QuotaCounter?
     }
 
     static let fiveHours: TimeInterval = 5 * 3600
@@ -56,7 +53,6 @@ enum DashboardBuilder {
             fiveHour: fiveHourWindow(sorted, rejections: rejections, live: live?.fiveHour, now: now),
             week: weekWindow(sorted, live: live?.sevenDay, now: now, calendar: calendar),
             modelQuota: modelQuotaWindow(sorted, live: live, now: now, calendar: calendar),
-            counter: quota.counter,
             totals: totals,
             costs: costs,
             tokenTrend: tokenTrend,
