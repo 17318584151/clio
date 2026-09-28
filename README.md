@@ -147,7 +147,8 @@ Clio --snapshot <目录>   # 把每个界面渲染成 PNG
 
 ## 已知限制
 
-- 热力图更早的部分取自 `~/.claude/stats-cache.json`，那是 Claude Code 自己的统计缓存：转录文件默认只保留 30 天（由 `cleanupPeriodDays` 控制），这份缓存留得更久。它按需重算而非持续写入，所以未必覆盖最近几天，按模型 token 也只回溯到该字段加入之后。合并时以扫描结果为准，缓存只填空缺。
+- Claude Code 的热力图与月环比读 Clio 自己保存的每日用量（`~/Library/Application Support/Clio/daily-tokens.json`）。Claude Code 默认删除 30 天前的转录文件（由 `cleanupPeriodDays` 控制），扫描到不了上月月初；转录文件还不可能被删除的日子按扫描结果记录，之后保留不变。
+- 首次运行之前、以及 Clio 停用超过 `cleanupPeriodDays` 天期间的日子，只在第一次遇到时取一次值：有扫描残留用残留，否则用 Claude Code 的统计缓存 `~/.claude/stats-cache.json`。这两种数值都不准：残留只是当天一部分会话；统计缓存把同一次回复按写入的行数重复计入，约为扫描结果的 1.2–2.5 倍，且只在 Claude Code 需要时重算，未必覆盖最近几天。
 - 今日活跃是推算值：日志只记录每次回复的时间点，没有会话时长。
 - Codex 的日志不记会话标识，那一侧的会话数会算作一个。
 - 「开机自启」需要正式签名，ad-hoc 构建下注册会失败，开关会自己弹回关闭。

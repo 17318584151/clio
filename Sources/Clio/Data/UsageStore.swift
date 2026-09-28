@@ -135,12 +135,19 @@ final class UsageStore: ObservableObject {
 
         var snapshots: [ToolSnapshot] = []
         if parsed.claudeAvailable && !parsed.claudeEvents.isEmpty {
+            let stored = UsageLedger.load()
+            let ledger = UsageLedger.updated(stored,
+                                             events: parsed.claudeEvents,
+                                             history: history,
+                                             now: Date(),
+                                             retentionDays: UsageLedger.retentionDays())
+            if ledger != stored { ledger.save() }
             snapshots.append(DashboardBuilder.snapshot(tool: .claudeCode,
                                                        events: parsed.claudeEvents,
                                                        rejections: parsed.claudeRejections,
                                                        prices: prices,
                                                        quota: quotaConfig[.claudeCode] ?? .init(),
-                                                       history: history))
+                                                       ledger: ledger))
         }
         if parsed.codexAvailable && !parsed.codexEvents.isEmpty {
             snapshots.append(DashboardBuilder.snapshot(tool: .codex,

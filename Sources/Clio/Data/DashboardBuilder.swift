@@ -19,7 +19,7 @@ enum DashboardBuilder {
                          rejections: [QuotaRejection],
                          prices: PriceTable,
                          quota: QuotaConfig,
-                         history: [Date: Int] = [:],
+                         ledger: UsageLedger? = nil,
                          now: Date = Date(),
                          calendar: Calendar = .current) -> ToolSnapshot {
         let sorted = events.sorted { $0.timestamp < $1.timestamp }
@@ -42,7 +42,13 @@ enum DashboardBuilder {
             totals[granularity] = currentCounts
 
             costs[granularity] = cost(of: inCurrent, prices: prices)
-            tokenTrend[granularity] = change(from: previousCounts.total, to: currentCounts.total)
+            if granularity == .month, let ledger {
+                // The previous month's transcripts are partly deleted by now.
+                tokenTrend[granularity] = change(from: ledger.tokens(in: previous, calendar: calendar),
+                                                 to: currentCounts.total)
+            } else {
+                tokenTrend[granularity] = change(from: previousCounts.total, to: currentCounts.total)
+            }
             buckets[granularity] = bucket(inCurrent, granularity: granularity, range: current, calendar: calendar)
             models[granularity] = breakdown(inCurrent, prices: prices)
         }
@@ -58,7 +64,7 @@ enum DashboardBuilder {
             tokenTrend: tokenTrend,
             buckets: buckets,
             models: models,
-            dailyTokens: dailyTokens(sorted, history: history, now: now, calendar: calendar),
+            dailyTokens: dailyTokens(sorted, ledger: ledger, now: now, calendar: calendar),
             activity: activity(sorted, now: now, calendar: calendar),
             updatedAt: now
         )
@@ -154,20 +160,17 @@ enum DashboardBuilder {
     }
 
     /// Tokens per calendar day for the last 22 weeks — the heatmap's span.
-    /// The scan covers whatever transcripts still exist; `history` reaches
-    /// further back and only fills the days the scan has nothing for.
+    /// The ledger, when there is one, reaches past the transcripts still on disk.
     private static func dailyTokens(_ events: [UsageEvent],
-                                    history: [Date: Int],
+                                    ledger: UsageLedger?,
                                     now: Date,
                                     calendar: Calendar) -> [Date: Int] {
         let earliest = calendar.date(byAdding: .day, value: -22 * 7, to: calendar.startOfDay(for: now)) ?? now
+        if let ledger { return ledger.daily(from: earliest, calendar: calendar) }
         var totals: [Date: Int] = [:]
         for event in events where event.timestamp >= earliest {
             let day = calendar.startOfDay(for: event.timestamp)
             totals[day, default: 0] += event.counts.total
-        }
-        for (day, tokens) in history where day >= earliest && totals[day] == nil {
-            totals[day] = tokens
         }
         return totals
     }
