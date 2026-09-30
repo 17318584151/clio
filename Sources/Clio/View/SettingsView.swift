@@ -158,6 +158,11 @@ struct SettingsContent: View {
                     row("自动检查更新", detail: "启动时与每 24 小时查询一次 GitHub Releases") {
                         Toggle("", isOn: $prefs.autoCheckUpdates).labelsHidden()
                     }
+                    divider
+                    row("自动安装更新", detail: "在后台下载新版本，弹出层与设置窗口都关闭时替换并重启") {
+                        Toggle("", isOn: $prefs.autoInstallUpdates).labelsHidden()
+                            .disabled(!prefs.autoCheckUpdates)
+                    }
                 }
 
                 section("价格表") {
@@ -248,7 +253,7 @@ struct SettingsContent: View {
                 ProgressView().controlSize(.small)
                 Text("正在更新…").foregroundStyle(theme.textSecondary)
             }
-        case .available(let release):
+        case .available(let release), .ready(let release):
             Button("更新到 \(release.version)") {
                 Task { await updater.install(release) }
             }
@@ -268,6 +273,7 @@ struct SettingsContent: View {
         case .checking: return "正在检查…"
         case .upToDate: return "已是最新 · \(checked)"
         case .available(let release): return "发现新版本 \(release.version)，下载后替换当前应用并重启"
+        case .ready(let release): return "已下载 \(release.version)，弹出层与设置窗口都关闭后替换并重启"
         case .installing(let release): return "正在下载并安装 \(release.version)"
         case .failed(let message): return message
         }

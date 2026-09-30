@@ -170,6 +170,15 @@ struct PanelView: View {
                 .buttonStyle(.plain)
                 .fixedSize()
             }
+            if let version = updater.justUpdated {
+                Text("已更新到 \(version)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.positive)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(theme.positive.opacity(0.12), in: Capsule())
+                    .fixedSize()
+            }
             Spacer()
             IconMenu(symbol: prefs.appearance.symbol,
                      tint: theme.textPrimary,
@@ -192,6 +201,9 @@ struct PanelView: View {
         .frame(height: 22)
         .padding(.top, 2)
         .padding(.horizontal, 2)
+        .onChange(of: panelIsOpen) { _, open in
+            if !open { updater.acknowledgeUpdate() }
+        }
     }
 }
 

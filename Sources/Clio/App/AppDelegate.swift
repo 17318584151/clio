@@ -38,7 +38,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.toggle(relativeTo: button)
         }
         self.statusItem = statusItem
-        panel.onVisibilityChange = { [weak statusItem] visible in statusItem?.setSelected(visible) }
+        panel.onVisibilityChange = { [weak statusItem] visible in
+            statusItem?.setSelected(visible)
+            if !visible { Updater.shared.installIfIdle() }
+        }
+        settings.onClose = { Updater.shared.installIfIdle() }
+        Updater.shared.windowsOpen = { [weak panel, weak settings] in
+            panel?.isVisible == true || settings?.isVisible == true
+        }
 
         prefs.$appearance
             .sink { NSApp.appearance = $0.nsAppearance }

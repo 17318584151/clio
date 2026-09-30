@@ -25,12 +25,26 @@ final class Updater: ObservableObject {
         case checking
         case upToDate
         case available(Release)
+        /// Downloaded and verified; installs once no window is open.
+        case ready(Release)
         case installing(Release)
         case failed(String)
     }
 
+    /// A verified disk image and the temporary directory holding it.
+    private struct Download {
+        let release: Release
+        let image: URL
+        let workspace: URL
+    }
+
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var lastChecked: Date?
+    /// The version an automatic update installed, until the panel has shown it.
+    @Published private(set) var justUpdated: String?
+
+    /// Whether the panel or the Settings window is on screen.
+    var windowsOpen: () -> Bool = { false }
 
     static let currentVersion =
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
@@ -38,21 +52,40 @@ final class Updater: ObservableObject {
     private static let endpoint = URL(string: "https://api.github.com/repos/UreMySunshine/clio/releases/latest")!
     private static let checkInterval: TimeInterval = 24 * 3600
     private static let lastCheckedKey = "lastUpdateCheck"
+    private static let justUpdatedKey = "justUpdatedTo"
 
+    private var prefs: Preferences?
+    private var staged: Download?
     private var timer: Timer?
     private var cancellables: Set<AnyCancellable> = []
 
     var availableRelease: Release? {
-        if case .available(let release) = phase { return release }
-        return nil
+        switch phase {
+        case .available(let release), .ready(let release): return release
+        default: return nil
+        }
+    }
+
+    private var installsAutomatically: Bool {
+        prefs?.autoCheckUpdates == true && prefs?.autoInstallUpdates == true
     }
 
     private init() {
         lastChecked = UserDefaults.standard.object(forKey: Self.lastCheckedKey) as? Date
+        if UserDefaults.standard.string(forKey: Self.justUpdatedKey) == Self.currentVersion {
+            justUpdated = Self.currentVersion
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.justUpdatedKey)
+        }
     }
 
     /// Checks now if a day has passed, then hourly asks whether one has again.
     func start(prefs: Preferences) {
+        self.prefs = prefs
+        prefs.$autoCheckUpdates.combineLatest(prefs.$autoInstallUpdates)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.followAutoInstallSetting() }
+            .store(in: &cancellables)
         prefs.$autoCheckUpdates
             .receive(on: RunLoop.main)
             .sink { [weak self] enabled in
@@ -75,7 +108,7 @@ final class Updater: ObservableObject {
 
     func check() async {
         switch phase {
-        case .checking, .installing: return
+        case .checking, .ready, .installing: return
         default: break
         }
         phase = .checking
@@ -89,15 +122,116 @@ final class Updater: ObservableObject {
             lastChecked = Date()
             UserDefaults.standard.set(lastChecked, forKey: Self.lastCheckedKey)
             phase = Self.isNewer(release.version, than: Self.currentVersion) ? .available(release) : .upToDate
+            await stage(release)
         } catch {
             phase = .failed("检查失败：\(error.localizedDescription)")
         }
     }
 
-    /// Downloads the disk image, swaps it in for the running bundle and relaunches.
-    func install(_ release: Release) async {
+    /// Clears the post-update notice once the panel has shown it.
+    func acknowledgeUpdate() {
+        guard justUpdated != nil else { return }
+        justUpdated = nil
+        UserDefaults.standard.removeObject(forKey: Self.justUpdatedKey)
+    }
+
+    /// Installs a downloaded update if no window is open. Called as one closes.
+    func installIfIdle() {
+        // A turn later: a window that is closing still reports itself visible.
+        Task {
+            guard case .ready(let release) = phase, !windowsOpen() else { return }
+            await install(release, automatic: true)
+        }
+    }
+
+    private func followAutoInstallSetting() {
+        switch phase {
+        case .available(let release) where installsAutomatically:
+            Task { await stage(release) }
+        case .ready(let release) where !installsAutomatically:
+            phase = .available(release)
+        default:
+            break
+        }
+    }
+
+    /// Downloads in the background ahead of an automatic install. A bundle this
+    /// user can't replace is left to the Settings button, which hands over the image.
+    private func stage(_ release: Release) async {
+        guard case .available(release) = phase, installsAutomatically, Self.canReplaceBundle else { return }
+        if staged?.release != release {
+            phase = .installing(release)
+            do {
+                let download = try await Self.download(release)
+                discardStaged()
+                staged = download
+            } catch {
+                phase = .failed("更新失败：\(error.localizedDescription)")
+                return
+            }
+        }
+        phase = installsAutomatically ? .ready(release) : .available(release)
+        installIfIdle()
+    }
+
+    /// Swaps the release in for the running bundle and relaunches.
+    func install(_ release: Release, automatic: Bool = false) async {
         if case .installing = phase { return }
         phase = .installing(release)
+        let download: Download
+        do {
+            download = try await downloaded(release)
+        } catch {
+            phase = .failed("更新失败：\(error.localizedDescription)")
+            return
+        }
+
+        let target = Bundle.main.bundleURL
+        guard Self.canReplaceBundle else {
+            // Installed somewhere this user can't write: hand over the image.
+            NSWorkspace.shared.open(download.image)
+            phase = .failed("没有写入 \(target.deletingLastPathComponent().path) 的权限，已打开安装包，请手动拖入")
+            return
+        }
+
+        do {
+            let mount = download.workspace.appending(path: "mount")
+            try await Self.run("/usr/bin/hdiutil", ["attach", download.image.path, "-nobrowse", "-readonly", "-mountpoint", mount.path])
+            do {
+                try Self.replace(target, with: mount.appending(path: target.lastPathComponent), expecting: release.version)
+            } catch {
+                try? await Self.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"])
+                throw error
+            }
+            // Awaited, not deferred: the relaunch below ends this process, and a
+            // detach left to run after it never does.
+            try? await Self.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"])
+            try? FileManager.default.removeItem(at: download.workspace)
+
+            if automatic { UserDefaults.standard.set(release.version, forKey: Self.justUpdatedKey) }
+            relaunch(target)
+        } catch {
+            try? FileManager.default.removeItem(at: download.workspace)
+            phase = .failed("更新失败：\(error.localizedDescription)")
+        }
+    }
+
+    /// The background download when it is this release, otherwise a fresh one.
+    private func downloaded(_ release: Release) async throws -> Download {
+        if let staged, staged.release == release {
+            self.staged = nil
+            return staged
+        }
+        discardStaged()
+        return try await Self.download(release)
+    }
+
+    private func discardStaged() {
+        if let staged { try? FileManager.default.removeItem(at: staged.workspace) }
+        staged = nil
+    }
+
+    private static func download(_ release: Release) async throws -> Download {
         let workspace = FileManager.default.temporaryDirectory.appending(path: "clio-update-\(UUID().uuidString)")
         do {
             try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
@@ -111,35 +245,17 @@ final class Updater: ObservableObject {
                     .map { String(format: "%02x", $0) }.joined()
                 guard actual == expected.lowercased() else { throw UpdateError("安装包校验和不符") }
             }
-
-            let target = Bundle.main.bundleURL
-            let parent = target.deletingLastPathComponent().path
-            guard FileManager.default.isWritableFile(atPath: parent),
-                  FileManager.default.isWritableFile(atPath: target.path) else {
-                // Installed somewhere this user can't write: hand over the image.
-                NSWorkspace.shared.open(image)
-                phase = .failed("没有写入 \(parent) 的权限，已打开安装包，请手动拖入")
-                return
-            }
-
-            let mount = workspace.appending(path: "mount")
-            try await Self.run("/usr/bin/hdiutil", ["attach", image.path, "-nobrowse", "-readonly", "-mountpoint", mount.path])
-            do {
-                try Self.replace(target, with: mount.appending(path: target.lastPathComponent), expecting: release.version)
-            } catch {
-                try? await Self.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"])
-                throw error
-            }
-            // Awaited, not deferred: the relaunch below ends this process, and a
-            // detach left to run after it never does.
-            try? await Self.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"])
-            try? FileManager.default.removeItem(at: workspace)
-
-            relaunch(target)
+            return Download(release: release, image: image, workspace: workspace)
         } catch {
             try? FileManager.default.removeItem(at: workspace)
-            phase = .failed("更新失败：\(error.localizedDescription)")
+            throw error
         }
+    }
+
+    private static var canReplaceBundle: Bool {
+        let target = Bundle.main.bundleURL
+        return FileManager.default.isWritableFile(atPath: target.deletingLastPathComponent().path)
+            && FileManager.default.isWritableFile(atPath: target.path)
     }
 
     /// Checks the mounted bundle is this app at the expected version, then swaps

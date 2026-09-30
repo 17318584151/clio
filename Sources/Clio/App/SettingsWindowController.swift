@@ -8,6 +8,9 @@ final class SettingsWindowController {
     private let store: UsageStore
     private let prefs: Preferences
     private let onPreviewConfetti: () -> Void
+    var onClose: (() -> Void)?
+
+    var isVisible: Bool { window?.isVisible == true }
 
     init(store: UsageStore, prefs: Preferences, onPreviewConfetti: @escaping () -> Void) {
         self.store = store
@@ -36,6 +39,11 @@ final class SettingsWindowController {
         // made transparent, scrolled rows showed straight through the title.
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: root)
+        _ = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                                   object: window,
+                                                   queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.onClose?() }
+        }
         return window
     }
 }
