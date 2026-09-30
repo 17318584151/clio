@@ -51,7 +51,6 @@ final class UsageStore: ObservableObject {
     private var timer: Timer?
     private var lastProbe: Date?
     private var probeInFlight = false
-    private var lastProbeResult: RateLimitSnapshot?
     private var lastFeedUpdate: Date?
     private var quotaWatch: DispatchSourceFileSystemObject?
     private var cancellables: Set<AnyCancellable> = []
@@ -113,7 +112,7 @@ final class UsageStore: ObservableObject {
         let config = ClaudeConfigReader.read()
         // Fresh enough to trust: two polling periods, so raising the interval
         // in Settings doesn't make the panel drop the percentages in between.
-        let liveLimits = RateLimitSnapshot.merged([lastProbeResult, feed, config].compactMap { $0 },
+        let liveLimits = RateLimitSnapshot.merged([feed, config].compactMap { $0 },
                                                   now: Date(),
                                                   maxAge: prefs.quotaInterval * 2)
         rateLimits = liveLimits
@@ -186,9 +185,9 @@ final class UsageStore: ObservableObject {
             let probed = await Task.detached(priority: .utility, operation: { UsageProbe.fetch() }).value
             guard let self else { return }
             self.probeInFlight = false
-            // An answer without limits leaves the previous reading in place.
-            guard let probed else { return }
-            self.lastProbeResult = probed
+            // The answer itself is undated; what the CLI fetched is read back
+            // from `~/.claude.json`, which records when it was fetched.
+            guard probed != nil else { return }
             await self.refresh()
         }
     }

@@ -1,12 +1,14 @@
 import Foundation
 import CFNetwork
 
-/// Asks Claude Code itself for the plan's quota state.
+/// Has Claude Code refresh the plan's quota state.
 ///
 /// The CLI answers a `get_usage` control request with the full set — the
 /// 5-hour and 7-day windows plus the per-model weekly one — using the existing
-/// login, spending no tokens and writing no transcript. Nothing on disk records
-/// any of it, so this is the only source.
+/// login, spending no tokens and writing no transcript. Before answering it
+/// stores what it fetched in `~/.claude.json` with the fetch time, which the
+/// answer lacks: within a minute of the last fetch, or when the endpoint fails,
+/// the answer is that stored copy, up to an hour old.
 enum UsageProbe {
     private static let candidates = [
         "\(NSHomeDirectory())/.local/bin/claude",
