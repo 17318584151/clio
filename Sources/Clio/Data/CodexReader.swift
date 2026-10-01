@@ -120,7 +120,11 @@ final class CodexReader {
                 fiveHour = window
             }
         }
+        // A payload that only carries one window must not wipe the other.
+        // Codex sends the 7-day window alone and leaves the 5-hour one empty.
         guard fiveHour != nil || week != nil else { return }
+        if fiveHour == nil { fiveHour = quota?.fiveHour }
+        if week == nil { week = quota?.sevenDay }
         quota = RateLimitSnapshot(updatedAt: timestamp,
                                   fiveHour: fiveHour,
                                   sevenDay: week,
