@@ -198,6 +198,7 @@ struct SettingsContent: View {
                 }
         }
         .font(.system(size: 12))
+        .toggleStyle(.switch)
         .padding(20)
         .frame(width: 420, alignment: .leading)
         .onAppear { bridgeState = StatusLineInstaller.state() }
