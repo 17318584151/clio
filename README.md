@@ -81,6 +81,8 @@ Claude Code 应答前会把取到的额度连同获取时间写进 `~/.claude.js
 
 原命令原样保留在后面，状态栏照常渲染。此后 Claude Code 每渲染一次状态栏就推送一次额度，用它时几乎实时。改写前会备份成 `settings.json.bak-clio-<时间戳>`，按「移除」可还原。这条通道不含按模型窗口。
 
+**Codex 周额度**（默认，无需配置）。Codex 把额度写在 `~/.codex/sessions` 的 `token_count` 事件里，字段是 `rate_limits`。`window_minutes` 为 10080（7 天）的窗口用 `used_percent` 和 `resets_at` 显示在「本周」；这是上一轮请求附带的快照，没有新的请求就不会更新。日志里目前没有 5 小时窗口，那一行仍显示窗口内的 Token 数。
+
 ## 数据与隐私
 
 - 只读本地日志：`~/.claude/projects/**/*.jsonl` 与 `~/.codex/sessions`，从不写入。
