@@ -73,6 +73,8 @@ final class Preferences: ObservableObject {
     @Published var tokenSource: TokenSource { didSet { defaults.set(tokenSource.rawValue, forKey: "tokenSource") } }
     @Published var selectedTool: Tool { didSet { defaults.set(selectedTool.rawValue, forKey: "selectedTool") } }
     @Published var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: "appearance") } }
+    /// Takes effect only from macOS 26, where the material exists.
+    @Published var liquidGlass: Bool { didSet { defaults.set(liquidGlass, forKey: "liquidGlass") } }
     @Published var autoCheckUpdates: Bool { didSet { defaults.set(autoCheckUpdates, forKey: "autoCheckUpdates") } }
     /// Applies only while `autoCheckUpdates` is on.
     @Published var autoInstallUpdates: Bool { didSet { defaults.set(autoInstallUpdates, forKey: "autoInstallUpdates") } }
@@ -96,6 +98,7 @@ final class Preferences: ObservableObject {
             "tokenSource": TokenSource.selectedTool.rawValue,
             "selectedTool": Tool.claudeCode.rawValue,
             "appearance": Appearance.system.rawValue,
+            "liquidGlass": false,
             "autoCheckUpdates": true,
             "autoInstallUpdates": true,
         ])
@@ -106,6 +109,7 @@ final class Preferences: ObservableObject {
         tokenSource = TokenSource(rawValue: defaults.string(forKey: "tokenSource") ?? "") ?? .selectedTool
         selectedTool = Tool(rawValue: defaults.string(forKey: "selectedTool") ?? "") ?? .claudeCode
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
+        liquidGlass = defaults.bool(forKey: "liquidGlass")
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
         autoInstallUpdates = defaults.bool(forKey: "autoInstallUpdates")
         planName = defaults.dictionary(forKey: "planName") as? [String: String] ?? [:]

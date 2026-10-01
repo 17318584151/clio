@@ -38,6 +38,9 @@ struct Theme {
     var warning: Color
     var danger: Color
     var positive: Color
+    /// Liquid Glass leans toward this, so the text keeps its contrast over
+    /// whatever sits behind the panel.
+    var glassTint: Color
     var heatmap: [Color]
 
     static let light = Theme(
@@ -66,6 +69,7 @@ struct Theme {
         warning: Color(hex: 0xFF9F0A),
         danger: Color(hex: 0xFF3B30),
         positive: Color(hex: 0x34C759),
+        glassTint: Color.white.opacity(0.35),
         heatmap: [Color(hex: 0xEBEBF0), Color(hex: 0xB9E3CD), Color(hex: 0x7DCBA3),
                   Color(hex: 0x3FAA73), Color(hex: 0x1F8552)]
     )
@@ -96,12 +100,21 @@ struct Theme {
         warning: Color(hex: 0xFF9F0A),
         danger: Color(hex: 0xFF453A),
         positive: Color(hex: 0x30D158),
+        glassTint: Color.black.opacity(0.35),
         heatmap: [Color.white.opacity(0.08), Color(hex: 0x1F5C3E), Color(hex: 0x2F8557),
                   Color(hex: 0x3FAA73), Color(hex: 0x6FD09B)]
     )
 
     static func resolve(_ scheme: ColorScheme) -> Theme {
         scheme == .dark ? .dark : .light
+    }
+
+    /// Liquid Glass lets far more of the backdrop through than the frosted
+    /// material, so an opaque empty cell can match the card it sits on.
+    var onGlass: Theme {
+        var theme = self
+        theme.heatmap[0] = textPrimary.opacity(0.08)
+        return theme
     }
 
     /// Ring and bar color for a quota window: monochrome below half, orange
@@ -135,6 +148,40 @@ extension EnvironmentValues {
     var theme: Theme {
         get { self[ThemeKey.self] }
         set { self[ThemeKey.self] = newValue }
+    }
+}
+
+/// Whether the panel is drawn in Liquid Glass.
+private struct LiquidGlassKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var liquidGlass: Bool {
+        get { self[LiquidGlassKey.self] }
+        set { self[LiquidGlassKey.self] = newValue }
+    }
+}
+
+enum LiquidGlass {
+    static var isAvailable: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
+}
+
+extension View {
+    /// Places the view on Liquid Glass in `shape` when `isOn`, from macOS 26.
+    /// `clear` glass leaves what is behind it unblurred; `interactive` glass
+    /// lights up under the pointer.
+    @ViewBuilder
+    func liquidGlass(_ isOn: Bool, in shape: some Shape, tint: Color? = nil,
+                     clear: Bool = false, interactive: Bool = false) -> some View {
+        if #available(macOS 26, *), isOn {
+            glassEffect((clear ? Glass.clear : .regular).tint(tint).interactive(interactive), in: shape)
+        } else {
+            self
+        }
     }
 }
 

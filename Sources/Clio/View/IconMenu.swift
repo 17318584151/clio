@@ -22,16 +22,18 @@ struct IconMenu: View {
 
     @Environment(\.isSnapshot) private var isSnapshot
     @Environment(\.theme) private var theme
+    @Environment(\.liquidGlass) private var glass
     @State private var isHovered = false
     @State private var isPressed = false
 
     var body: some View {
+        let shape = glass ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         Image(systemName: symbol)
             .font(.system(size: 13))
             .foregroundStyle(tint)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(isHovered ? theme.segmentedFill : .clear,
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(isHovered ? theme.segmentedFill : .clear, in: shape)
+            .liquidGlass(glass, in: shape)
             .scaleEffect(isPressed ? 0.92 : 1)
             .animation(.easeOut(duration: 0.08), value: isHovered)
             .animation(.easeOut(duration: 0.1), value: isPressed)

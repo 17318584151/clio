@@ -87,37 +87,42 @@ struct Segmented<Value: Hashable>: View {
     var options: [(value: Value, title: String, symbol: String?)]
     @Binding var selection: Value
     var compact = false
+    @State private var target: Value?
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(options, id: \.value) { option in
-                let isSelected = option.value == selection
-                Button {
-                    selection = option.value
-                } label: {
-                    HStack(spacing: 6) {
-                        if let symbol = option.symbol {
-                            Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+        SegmentTrack(selection: $selection,
+                     target: $target,
+                     thumbRadius: compact ? 4 : 5,
+                     trackRadius: compact ? 5 : 8,
+                     inset: compact ? 1.5 : 2,
+                     spring: Motion.spring(Motion.period, reduce: reduceMotion)) {
+            HStack(spacing: 0) {
+                ForEach(options, id: \.value) { option in
+                    let isSelected = option.value == (target ?? selection)
+                    Button {
+                        selection = option.value
+                    } label: {
+                        HStack(spacing: 6) {
+                            if let symbol = option.symbol {
+                                Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                            }
+                            Text(option.title)
                         }
-                        Text(option.title)
+                        .font(.system(size: compact ? 10 : 12, weight: .medium))
+                        .foregroundStyle(isSelected ? theme.segmentedSelectedText : theme.textSecondary)
+                        .scaleEffect(option.value == target ? 1.12 : 1)
+                        .frame(height: compact ? 16 : 24.5)
+                        .frame(maxWidth: compact ? nil : .infinity)
+                        .padding(.horizontal, compact ? 8 : 0)
+                        .segmentFrame(option.value)
+                        // An unselected segment draws nothing but its label, so
+                        // without this only the glyphs answer a click.
+                        .contentShape(Rectangle())
                     }
-                    .font(.system(size: compact ? 10 : 12, weight: .medium))
-                    .foregroundStyle(isSelected ? theme.segmentedSelectedText : theme.textSecondary)
-                    .frame(height: compact ? 16 : 24.5)
-                    .frame(maxWidth: compact ? nil : .infinity)
-                    .padding(.horizontal, compact ? 8 : 0)
-                    .selectedSegment(isSelected)
-                    // An unselected segment draws nothing but its label, so
-                    // without this only the glyphs answer a click.
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
-        .segmentThumb(cornerRadius: compact ? 4 : 5)
-        .animation(Motion.spring(Motion.period, reduce: reduceMotion), value: selection)
-        .padding(compact ? 1.5 : 2)
-        .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: compact ? 5 : 8, style: .continuous))
     }
 }
 
@@ -127,78 +132,161 @@ struct ToolSwitch: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var tools: [Tool]
     @Binding var selection: Tool
+    @State private var target: Tool?
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(tools) { tool in
-                let isSelected = tool == selection
-                Button {
-                    selection = tool
-                } label: {
-                    HStack(spacing: 6) {
-                        BrandIcon(tool: tool,
-                                  size: 12,
-                                  color: isSelected
-                                      ? (tool.brandColor ?? theme.segmentedSelectedText)
-                                      : theme.textSecondary)
-                        Text(tool.displayName)
+        SegmentTrack(selection: $selection,
+                     target: $target,
+                     thumbRadius: 5,
+                     trackRadius: 8,
+                     inset: 2,
+                     spring: Motion.spring(Motion.tool, reduce: reduceMotion)) {
+            HStack(spacing: 0) {
+                ForEach(tools) { tool in
+                    let isSelected = tool == (target ?? selection)
+                    Button {
+                        selection = tool
+                    } label: {
+                        HStack(spacing: 6) {
+                            BrandIcon(tool: tool,
+                                      size: 12,
+                                      color: isSelected
+                                          ? (tool.brandColor ?? theme.segmentedSelectedText)
+                                          : theme.textSecondary)
+                            Text(tool.displayName)
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(isSelected ? theme.segmentedSelectedText : theme.textSecondary)
+                        .scaleEffect(tool == target ? 1.12 : 1)
+                        .frame(height: 25)
+                        .frame(maxWidth: .infinity)
+                        .segmentFrame(tool)
+                        .contentShape(Rectangle())
                     }
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(isSelected ? theme.segmentedSelectedText : theme.textSecondary)
-                    .frame(height: 25)
-                    .frame(maxWidth: .infinity)
-                    .selectedSegment(isSelected)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
-        .segmentThumb(cornerRadius: 5)
-        .animation(Motion.spring(Motion.tool, reduce: reduceMotion), value: selection)
-        .padding(2)
-        .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
-/// Bounds of the selected segment in a switch.
-private struct SelectedSegmentKey: PreferenceKey {
-    static var defaultValue: Anchor<CGRect>?
+/// Each segment's frame within its switch, keyed by the segment's value.
+private struct SegmentFramesKey: PreferenceKey {
+    static let space = "segments"
+    static var defaultValue: [AnyHashable: CGRect] = [:]
 
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
-        value = value ?? nextValue()
+    static func reduce(value: inout [AnyHashable: CGRect], nextValue: () -> [AnyHashable: CGRect]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 
 private extension View {
-    func selectedSegment(_ isSelected: Bool) -> some View {
-        anchorPreference(key: SelectedSegmentKey.self, value: .bounds) { isSelected ? $0 : nil }
-    }
-
-    /// One thumb for the whole switch, behind every label, placed on the
-    /// selected segment. Drawn per segment instead, a thumb sliding across
-    /// would pass over the labels of the segments before it.
-    func segmentThumb(cornerRadius: CGFloat) -> some View {
-        backgroundPreferenceValue(SelectedSegmentKey.self) { anchor in
-            GeometryReader { proxy in
-                if let anchor {
-                    let rect = proxy[anchor]
-                    SegmentThumb(cornerRadius: cornerRadius)
-                        .frame(width: rect.width, height: rect.height)
-                        .offset(x: rect.minX, y: rect.minY)
-                }
-            }
-        }
+    func segmentFrame(_ value: some Hashable) -> some View {
+        background(GeometryReader { proxy in
+            Color.clear.preference(key: SegmentFramesKey.self,
+                                   value: [AnyHashable(value): proxy.frame(in: .named(SegmentFramesKey.space))])
+        })
     }
 }
 
-private struct SegmentThumb: View {
+/// One thumb for the whole switch, behind every label, placed on the selected
+/// segment. Drawn per segment instead, a thumb sliding across would pass over
+/// the labels of the segments before it. Pressing and dragging carries the
+/// thumb along; letting go selects the segment it ends nearest to.
+private struct SegmentTrack<Value: Hashable, Content: View>: View {
     @Environment(\.theme) private var theme
-    var cornerRadius: CGFloat
+    @Environment(\.liquidGlass) private var glass
+    @Binding var selection: Value
+    /// The segment under the dragged thumb, for the labels to highlight.
+    @Binding var target: Value?
+    var thumbRadius: CGFloat
+    var trackRadius: CGFloat
+    /// Between the track's edge and the segments.
+    var inset: CGFloat
+    var spring: Animation?
+    @ViewBuilder var content: Content
+
+    @State private var frames: [AnyHashable: CGRect] = [:]
+    @State private var dragX: CGFloat?
+
+    /// Under Liquid Glass the dragged thumb becomes a clear lens.
+    private var lensing: Bool { glass && dragX != nil }
 
     var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(theme.segmentedSelected)
-            .shadow(color: .black.opacity(0.12), radius: 1, y: 1)
+        let track = RoundedRectangle(cornerRadius: trackRadius, style: .continuous)
+        content
+            .coordinateSpace(name: SegmentFramesKey.space)
+            .onPreferenceChange(SegmentFramesKey.self) { frames = $0 }
+            // Over the track's glass and under the labels: a lens above them
+            // refracts the label into a blur.
+            .background(alignment: .topLeading) {
+                if lensing { lens } else { thumb }
+            }
+            .animation(spring, value: selection)
+            .simultaneousGesture(drag)
+            .padding(inset)
+            // A layer of its own rather than glass around the labels, which
+            // would hold the lens inside it.
+            .background(glass ? .clear : theme.segmentedFill, in: track)
+            .background { Color.clear.liquidGlass(glass, in: track, tint: theme.segmentedFill) }
+    }
+
+    @ViewBuilder
+    private var thumb: some View {
+        if let rect = thumbRect {
+            RoundedRectangle(cornerRadius: thumbRadius, style: .continuous)
+                .fill(theme.segmentedSelected)
+                .shadow(color: .black.opacity(0.12), radius: 1, y: 1)
+                .frame(width: rect.width, height: rect.height)
+                .offset(x: rect.minX, y: rect.minY)
+                .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
+    private var lens: some View {
+        if let rect = thumbRect {
+            Color.clear
+                .liquidGlass(true, in: Capsule(), clear: true, interactive: true)
+                .frame(width: rect.width + 2 * inset, height: rect.height + 2 * inset)
+                .scaleEffect(1.3)
+                .offset(x: rect.minX - inset, y: rect.minY - inset)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var thumbRect: CGRect? {
+        guard let selected = frames[AnyHashable(selection)] else { return nil }
+        guard let dragX else { return selected }
+        let track = frames.values.reduce(CGRect.null) { $0.union($1) }
+        let width = target.flatMap { frames[AnyHashable($0)]?.width } ?? selected.width
+        let x = min(max(dragX - width / 2, track.minX), track.maxX - width)
+        return CGRect(x: x, y: selected.minY, width: width, height: selected.height)
+    }
+
+    private var drag: some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: .named(SegmentFramesKey.space))
+            .onChanged { value in
+                if dragX == nil {
+                    withAnimation(spring) { dragX = value.location.x }
+                } else {
+                    dragX = value.location.x
+                }
+                let next = nearest(to: value.location.x)
+                if next != target { withAnimation(spring) { target = next } }
+            }
+            .onEnded { value in
+                let landed = nearest(to: value.location.x)
+                withAnimation(spring) {
+                    if let landed { selection = landed }
+                    dragX = nil
+                    target = nil
+                }
+            }
+    }
+
+    private func nearest(to x: CGFloat) -> Value? {
+        frames.min { abs($0.value.midX - x) < abs($1.value.midX - x) }?.key.base as? Value
     }
 }
 

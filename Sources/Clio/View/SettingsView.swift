@@ -39,6 +39,12 @@ struct SettingsContent: View {
                             Toggle("", isOn: $prefs.confettiEnabled).labelsHidden()
                         }
                     }
+                    if LiquidGlass.isAvailable {
+                        divider
+                        row("液态玻璃", detail: "面板背景与切换控件使用 macOS 26 的液态玻璃材质", experimental: true) {
+                            Toggle("", isOn: $prefs.liquidGlass).labelsHidden()
+                        }
+                    }
                     divider
                     row("开机自启") {
                         Toggle("", isOn: $prefs.launchAtLogin).labelsHidden()
@@ -226,10 +232,21 @@ struct SettingsContent: View {
     @ViewBuilder
     private func row<Trailing: View>(_ title: String,
                                      detail: String? = nil,
+                                     experimental: Bool = false,
                                      @ViewBuilder trailing: () -> Trailing) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).foregroundStyle(theme.textPrimary)
+                HStack(spacing: 5) {
+                    Text(title).foregroundStyle(theme.textPrimary)
+                    if experimental {
+                        Text("实验性")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(theme.warning)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(theme.warning.opacity(0.14), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    }
+                }
                 if let detail {
                     Text(detail)
                         .font(.system(size: 10))

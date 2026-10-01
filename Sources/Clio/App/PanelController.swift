@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 /// A borderless panel that behaves like a popover under the status item, but
 /// keeps the design's own corner radius and background instead of an arrow.
@@ -99,11 +100,18 @@ final class PanelController {
     /// Where the status item sits along the panel's top edge: the point the
     /// panel grows from.
     private var growthOriginX = Metrics.panelWidth / 2
+    private var cancellables: Set<AnyCancellable> = []
 
     init(store: UsageStore, prefs: Preferences, onOpenSettings: @escaping () -> Void) {
         self.store = store
         self.prefs = prefs
         self.onOpenSettings = onOpenSettings
+        prefs.$liquidGlass
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.swapBackdrop() }
+            .store(in: &cancellables)
     }
 
     /// Open, or opening. A panel still fading out counts as closed, so a click
@@ -169,8 +177,15 @@ final class PanelController {
                 + " blending=\(effect.blendingMode == .behindWindow ? "behindWindow" : "withinWindow")"
                 + " state=\(effect.state == .active ? "active" : "other")"
                 + " windowOpaque=\(panel.isOpaque)\n"
+        } else if container?.subviews.first != nil {
+            line += "backdrop=NSView（液态玻璃由面板视图绘制） windowOpaque=\(panel.isOpaque)\n"
         } else {
             line += "backdrop=缺失\n"
+        }
+        if let container, let backdrop = container.subviews.first, let hosting {
+            line += "container=\(NSStringFromRect(container.bounds))"
+                + " backdrop=\(NSStringFromRect(backdrop.frame))"
+                + " hosting=\(NSStringFromRect(hosting.convert(hosting.bounds, to: container)))\n"
         }
         try? line.write(to: AppPaths.support.appending(path: "panel-frame.txt"),
                         atomically: true,
@@ -287,33 +302,15 @@ final class PanelController {
         hosting.sizingOptions = [.intrinsicContentSize]
         self.hosting = hosting
 
-        // The panel's translucent fills are designed to sit over a blurred
-        // backdrop; without one they composite against the desktop and read as
-        // washed-out grey.
-        let backdrop = NSVisualEffectView()
-        backdrop.material = .popover
-        backdrop.blendingMode = .behindWindow
-        // Stays blurred even when the panel isn't the key window; `.followsWindowActiveState`
-        // would flatten it the moment focus moves elsewhere.
-        backdrop.state = .active
-        backdrop.wantsLayer = true
-        backdrop.layer?.cornerRadius = Metrics.panelRadius
-        backdrop.layer?.masksToBounds = true
-        // The behind-window blur — and the window shadow derived from it — take
-        // their shape from this mask. A layer corner radius only clips what is
-        // drawn on top, which left the shadow square at the corners.
-        backdrop.maskImage = Self.roundedMask(radius: Metrics.panelRadius)
-        backdrop.frame = NSRect(x: 0, y: 0, width: Metrics.panelWidth, height: 200)
-        backdrop.autoresizingMask = [.width, .height]
-        hosting.frame = backdrop.bounds
-        hosting.autoresizingMask = [.width, .height]
-        backdrop.addSubview(hosting)
-
         // The open and close animation transforms this container's sublayers,
         // which carries the blur, its mask and the content together.
-        let container = NSView(frame: backdrop.frame)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: Metrics.panelWidth, height: 200))
         container.wantsLayer = true
-        container.addSubview(backdrop)
+        // The window shadow follows this clip; around Liquid Glass it would
+        // otherwise come out square.
+        container.layer?.cornerRadius = Metrics.panelRadius
+        container.layer?.masksToBounds = true
+        installBackdrop(in: container, holding: hosting)
         self.container = container
 
         let panel = KeyablePanel(contentRect: NSRect(x: 0, y: 0, width: Metrics.panelWidth, height: 200),
@@ -330,6 +327,48 @@ final class PanelController {
         // Chart and heatmap readouts follow the pointer.
         panel.acceptsMouseMovedEvents = true
         return panel
+    }
+
+    /// Puts the blur behind the content, replacing any there already.
+    private func installBackdrop(in container: NSView, holding hosting: NSView) {
+        let old = container.subviews
+        let backdrop: NSView
+        if prefs.liquidGlass && LiquidGlass.isAvailable {
+            // The panel view draws the glass itself. `NSGlassEffectView` is not
+            // used: it lays its content out with constraints, and the content's
+            // intrinsic height then pulls the content view off the window's size.
+            backdrop = NSView(frame: container.bounds)
+        } else {
+            // The panel's translucent fills are designed to sit over a blurred
+            // backdrop; without one they composite against the desktop and read as
+            // washed-out grey.
+            let effect = NSVisualEffectView(frame: container.bounds)
+            effect.material = .popover
+            effect.blendingMode = .behindWindow
+            // Stays blurred even when the panel isn't the key window; `.followsWindowActiveState`
+            // would flatten it the moment focus moves elsewhere.
+            effect.state = .active
+            effect.wantsLayer = true
+            effect.layer?.cornerRadius = Metrics.panelRadius
+            effect.layer?.masksToBounds = true
+            // The behind-window blur — and the window shadow derived from it — take
+            // their shape from this mask. A layer corner radius only clips what is
+            // drawn on top, which left the shadow square at the corners.
+            effect.maskImage = Self.roundedMask(radius: Metrics.panelRadius)
+            backdrop = effect
+        }
+        backdrop.autoresizingMask = [.width, .height]
+        hosting.frame = backdrop.bounds
+        hosting.autoresizingMask = [.width, .height]
+        backdrop.addSubview(hosting)
+        container.addSubview(backdrop)
+        old.forEach { $0.removeFromSuperview() }
+    }
+
+    private func swapBackdrop() {
+        guard let container, let hosting else { return }
+        installBackdrop(in: container, holding: hosting)
+        panel?.invalidateShadow()
     }
 
     /// A stretchable rounded rectangle: the corners are drawn once and the

@@ -16,6 +16,7 @@ struct PanelView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.panelIsOpen) private var panelIsOpen
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isSnapshot) private var isSnapshot
     @State private var granularity: Granularity = .day
     @State private var basis: ShareBasis = .tokens
     @State private var didApplyInitial = false
@@ -25,6 +26,8 @@ struct PanelView: View {
     @State private var pageHeightTool: Tool?
 
     private var theme: Theme { Theme.resolve(scheme) }
+    /// Off-screen rendering can't draw the material, so snapshots keep the fills.
+    private var usesGlass: Bool { prefs.liquidGlass && LiquidGlass.isAvailable && !isSnapshot }
 
     var body: some View {
         Group {
@@ -38,20 +41,32 @@ struct PanelView: View {
             }
         }
         .blur(radius: panelIsOpen ? 0 : 10)
-        .environment(\.theme, theme)
+        .environment(\.theme, usesGlass ? theme.onGlass : theme)
+        .environment(\.liquidGlass, usesGlass)
         .frame(width: Metrics.panelWidth)
         // Translucent fill over the window's blurred backdrop, plus the two
         // hairlines the design gives the glass edge: light inside, dark on it.
-        .background(theme.panelFill, in: RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous)
-                .inset(by: 0.25)
-                .strokeBorder(theme.panelInnerStroke, lineWidth: 0.5)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous)
-                .strokeBorder(theme.panelStroke, lineWidth: 0.5)
-        )
+        // Liquid Glass draws its own edge and needs neither.
+        .background(usesGlass ? .clear : theme.panelFill,
+                    in: RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous))
+        .background {
+            Color.clear.liquidGlass(usesGlass,
+                                    in: RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous),
+                                    tint: theme.glassTint)
+        }
+        .overlay {
+            if !usesGlass {
+                RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous)
+                    .inset(by: 0.25)
+                    .strokeBorder(theme.panelInnerStroke, lineWidth: 0.5)
+            }
+        }
+        .overlay {
+            if !usesGlass {
+                RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous)
+                    .strokeBorder(theme.panelStroke, lineWidth: 0.5)
+            }
+        }
         .background(
             GeometryReader { proxy in
                 Color.clear.onChange(of: proxy.size.height, initial: true) { _, height in
@@ -164,7 +179,8 @@ struct PanelView: View {
                         .foregroundStyle(theme.accent)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(theme.accent.opacity(0.12), in: Capsule())
+                        .background(usesGlass ? .clear : theme.accent.opacity(0.12), in: Capsule())
+                        .liquidGlass(usesGlass, in: Capsule(), tint: theme.accent.opacity(0.2))
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
