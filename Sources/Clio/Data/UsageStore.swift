@@ -30,6 +30,38 @@ actor LogReaders {
         }
         return result
     }
+
+    /// Parses what is new, then builds each tool's dashboard. Building walks
+    /// every event and takes a few hundred milliseconds, so it stays here too.
+    func snapshots(prices: PriceTable, quota: [Tool: DashboardBuilder.QuotaConfig]) -> [ToolSnapshot] {
+        let parsed = refresh()
+        let history = StatsCacheReader.dailyTokens()
+
+        var snapshots: [ToolSnapshot] = []
+        if parsed.claudeAvailable && !parsed.claudeEvents.isEmpty {
+            let stored = UsageLedger.load()
+            let ledger = UsageLedger.updated(stored,
+                                             events: parsed.claudeEvents,
+                                             history: history,
+                                             now: Date(),
+                                             retentionDays: UsageLedger.retentionDays())
+            if ledger != stored { ledger.save() }
+            snapshots.append(DashboardBuilder.snapshot(tool: .claudeCode,
+                                                       events: parsed.claudeEvents,
+                                                       rejections: parsed.claudeRejections,
+                                                       prices: prices,
+                                                       quota: quota[.claudeCode] ?? .init(),
+                                                       ledger: ledger))
+        }
+        if parsed.codexAvailable && !parsed.codexEvents.isEmpty {
+            snapshots.append(DashboardBuilder.snapshot(tool: .codex,
+                                                       events: parsed.codexEvents,
+                                                       rejections: [],
+                                                       prices: prices,
+                                                       quota: quota[.codex] ?? .init()))
+        }
+        return snapshots
+    }
 }
 
 /// Owns the readers, the refresh timer, and the current dashboard.
@@ -129,32 +161,7 @@ final class UsageStore: ObservableObject {
             )
         }
 
-        let parsed = await readers.refresh()
-        let history = StatsCacheReader.dailyTokens()
-
-        var snapshots: [ToolSnapshot] = []
-        if parsed.claudeAvailable && !parsed.claudeEvents.isEmpty {
-            let stored = UsageLedger.load()
-            let ledger = UsageLedger.updated(stored,
-                                             events: parsed.claudeEvents,
-                                             history: history,
-                                             now: Date(),
-                                             retentionDays: UsageLedger.retentionDays())
-            if ledger != stored { ledger.save() }
-            snapshots.append(DashboardBuilder.snapshot(tool: .claudeCode,
-                                                       events: parsed.claudeEvents,
-                                                       rejections: parsed.claudeRejections,
-                                                       prices: prices,
-                                                       quota: quotaConfig[.claudeCode] ?? .init(),
-                                                       ledger: ledger))
-        }
-        if parsed.codexAvailable && !parsed.codexEvents.isEmpty {
-            snapshots.append(DashboardBuilder.snapshot(tool: .codex,
-                                                       events: parsed.codexEvents,
-                                                       rejections: [],
-                                                       prices: prices,
-                                                       quota: quotaConfig[.codex] ?? .init()))
-        }
+        let snapshots = await readers.snapshots(prices: prices, quota: quotaConfig)
 
         priceOrigin = origin
         priceFetchedAt = fetchedAt
