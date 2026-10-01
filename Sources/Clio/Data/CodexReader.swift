@@ -7,6 +7,11 @@ import Foundation
 /// the delta is accumulated. `input_tokens` there already includes the cached
 /// portion reported separately as `cached_input_tokens`.
 ///
+/// Each rollout file is one thread. `session_meta.session_id` is the
+/// conversation it belongs to, and subagent threads repeat their parent's id,
+/// so the activity card can count conversations instead of files. The file
+/// path is the fallback when a log has no meta line.
+///
 /// The shape below is the Codex CLI rollout format. Fields are read defensively
 /// and a line that doesn't match is skipped rather than failing the scan.
 final class CodexReader {
@@ -15,20 +20,25 @@ final class CodexReader {
     /// Latest model named in each session file. Subagent sessions log a
     /// different model alongside their parent, so it is not shared across files.
     private var models: [String: String] = [:]
+    /// Conversation id from `session_meta`, keyed by file path.
+    private var sessionIDs: [String: String] = [:]
     /// Latest `total_token_usage` seen in each session file.
     private var totals: [String: Int] = [:]
 
     var isAvailable: Bool { scanner.rootExists }
 
     /// `token_count` lines carry usage but no model; the model is named by the
-    /// `turn_context` line that opens each turn.
+    /// `turn_context` line that opens each turn. `session_meta` is the first
+    /// line of a rollout and names the conversation.
     private static let usageMarker = Array("token_count".utf8)
     private static let contextMarker = Array("turn_context".utf8)
+    private static let sessionMarker = Array("session_meta".utf8)
 
     func refresh() -> [UsageEvent] {
         scanner.scan { file, line in
             guard ByteSearch.contains(line, Self.usageMarker)
-                    || ByteSearch.contains(line, Self.contextMarker) else { return }
+                    || ByteSearch.contains(line, Self.contextMarker)
+                    || ByteSearch.contains(line, Self.sessionMarker) else { return }
             guard let base = line.baseAddress else { return }
             let data = Data(bytes: base, count: line.count)
             guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -42,6 +52,13 @@ final class CodexReader {
 
     private func ingest(_ object: [String: Any], file: String) {
         let payload = object["payload"] as? [String: Any] ?? [:]
+
+        if object["type"] as? String == "session_meta" {
+            let id = (payload["session_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                ?? (payload["id"] as? String)
+            if let id, !id.isEmpty { sessionIDs[file] = id }
+            return
+        }
 
         // Any line that names a model updates what later turns are attributed to.
         if let model = payload["model"] as? String, !model.isEmpty {
@@ -78,6 +95,10 @@ final class CodexReader {
         guard counts.total > 0 else { return }
         let key = "\(stamp)|\(currentModel)|\(counts.input)|\(counts.output)|\(counts.cacheRead)"
         guard events[key] == nil else { return }
-        events[key] = UsageEvent(timestamp: timestamp, model: currentModel, counts: counts, dedupeKey: key)
+        events[key] = UsageEvent(timestamp: timestamp,
+                                 model: currentModel,
+                                 counts: counts,
+                                 dedupeKey: key,
+                                 sessionID: sessionIDs[file] ?? file)
     }
 }
