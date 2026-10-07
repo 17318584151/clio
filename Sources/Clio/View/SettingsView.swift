@@ -58,7 +58,8 @@ struct SettingsContent: View {
                             Text("每 5 分钟").tag(300.0)
                         }
                         .labelsHidden()
-                        .frame(width: 110)
+                        .controlSize(.small)
+                        .fixedSize()
                     }
                 }
 
@@ -68,7 +69,8 @@ struct SettingsContent: View {
                             ForEach(MenuBarDisplay.allCases) { Text($0.title).tag($0) }
                         }
                         .labelsHidden()
-                        .frame(width: 180)
+                        .controlSize(.small)
+                        .fixedSize()
                     }
                     divider
                     row("Token 数来源") {
@@ -76,7 +78,8 @@ struct SettingsContent: View {
                             ForEach(TokenSource.allCases) { Text($0.title).tag($0) }
                         }
                         .labelsHidden()
-                        .frame(width: 130)
+                        .controlSize(.small)
+                        .fixedSize()
                     }
                 }
 
@@ -94,7 +97,8 @@ struct SettingsContent: View {
                             Text("每 2 小时").tag(7200.0)
                         }
                         .labelsHidden()
-                        .frame(width: 110)
+                        .controlSize(.small)
+                        .fixedSize()
                     }
                     divider
                     row("状态栏推送", detail: bridgeDetail) {
@@ -108,7 +112,7 @@ struct SettingsContent: View {
                         Text(bridgeState == .installed
                              ? "已写入 ~/.claude/settings.json 的 statusLine.command："
                              : "按「接入」会把 statusLine.command 改写成：")
-                            .font(.system(size: 11))
+                            .font(.system(size: 10))
                             .foregroundStyle(theme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Text(bridgeCommand)
