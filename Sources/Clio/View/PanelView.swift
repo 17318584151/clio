@@ -196,13 +196,13 @@ struct PanelView: View {
                     .fixedSize()
             }
             Spacer()
-            IconMenu(symbol: prefs.appearance.symbol,
-                     tint: theme.textPrimary,
-                     items: Appearance.allCases.map { option in
-                         .init(title: option.title, shortcut: "", isOn: prefs.appearance == option) {
-                             prefs.appearance = option
-                         }
-                     })
+            IconMenu(symbol: prefs.appearance.symbol, tint: theme.textPrimary, action: {
+                prefs.appearance = switch prefs.appearance {
+                case .system: .light
+                case .light: .dark
+                case .dark: .system
+                }
+            })
                 .frame(width: 22, height: 22)
             IconMenu(symbol: "gearshape", tint: theme.textPrimary, items: [
                 .init(title: "刷新", shortcut: "r") { Task { await store.refresh() } },

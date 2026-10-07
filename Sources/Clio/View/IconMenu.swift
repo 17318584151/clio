@@ -1,7 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// A footer icon button and the menu it pops.
+/// A footer icon button and the menu it pops, or the action it runs instead
+/// when one is given.
 ///
 /// The glyph is drawn by SwiftUI and the AppKit button sits transparently on
 /// top: an `NSMenu` popped from a real view anchors and dismisses reliably in a
@@ -18,7 +19,8 @@ struct IconMenu: View {
 
     var symbol: String
     var tint: Color
-    var items: [Item]
+    var items: [Item] = []
+    var action: (() -> Void)? = nil
 
     @Environment(\.isSnapshot) private var isSnapshot
     @Environment(\.theme) private var theme
@@ -40,6 +42,7 @@ struct IconMenu: View {
             .overlay {
                 if !isSnapshot {
                     MenuTrigger(items: items,
+                                action: action,
                                 onHover: { isHovered = $0 },
                                 onPress: { isPressed = $0 })
                 }
@@ -49,6 +52,7 @@ struct IconMenu: View {
 
 private struct MenuTrigger: NSViewRepresentable {
     var items: [IconMenu.Item]
+    var action: (() -> Void)?
     var onHover: (Bool) -> Void
     var onPress: (Bool) -> Void
 
@@ -62,6 +66,7 @@ private struct MenuTrigger: NSViewRepresentable {
 
     func updateNSView(_ view: TrackingButton, context: Context) {
         context.coordinator.items = items
+        context.coordinator.action = action
         view.onHover = onHover
         view.onPress = onPress
     }
@@ -70,6 +75,7 @@ private struct MenuTrigger: NSViewRepresentable {
 
     final class Coordinator: NSObject {
         var items: [IconMenu.Item]
+        var action: (() -> Void)?
 
         init(items: [IconMenu.Item]) {
             self.items = items
@@ -78,6 +84,10 @@ private struct MenuTrigger: NSViewRepresentable {
         @objc func present(_ sender: NSButton) {
             let button = sender as? TrackingButton
             button?.onPress?(false)
+            if let action {
+                action()
+                return
+            }
             let menu = NSMenu()
             for (index, item) in items.enumerated() {
                 if item.title.isEmpty {
