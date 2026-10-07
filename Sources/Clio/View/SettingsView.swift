@@ -63,25 +63,12 @@ struct SettingsContent: View {
                 }
 
                 section("菜单栏显示") {
-                    ForEach(MenuBarDisplay.allCases) { mode in
-                        Button {
-                            prefs.menuBarDisplay = mode
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: prefs.menuBarDisplay == mode
-                                      ? "largecircle.fill.circle" : "circle")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(prefs.menuBarDisplay == mode ? theme.accent : theme.textSecondary)
-                                Text(mode.title)
-                                    .foregroundStyle(theme.textPrimary)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 9)
-                            .contentShape(Rectangle())
+                    row("显示内容") {
+                        Picker("", selection: $prefs.menuBarDisplay) {
+                            ForEach(MenuBarDisplay.allCases) { Text($0.title).tag($0) }
                         }
-                        .buttonStyle(.plain)
-                        if mode != MenuBarDisplay.allCases.last { divider }
+                        .labelsHidden()
+                        .frame(width: 180)
                     }
                     divider
                     row("Token 数来源") {
@@ -172,29 +159,15 @@ struct SettingsContent: View {
                 }
 
                 section("价格表") {
-                    row("来源", detail: "每 24 小时用 ETag 条件请求校验一次；失败时沿用上次结果") {
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text(store.priceOrigin.label)
-                                .font(.system(size: 12))
-                                .multilineTextAlignment(.trailing)
-                                .foregroundStyle(theme.textSecondary)
-                            Text("最近更新 \(priceFetched)")
-                                .font(.system(size: 10))
-                                .foregroundStyle(theme.positive)
-                        }
-                    }
-                    divider
-                    HStack {
-                        Spacer()
-                        Button("立即更新价格") {
+                    row(store.priceOrigin == .builtin ? "内置价格" : "models.dev", detail: priceDetail) {
+                        Button("立即更新") {
                             Task {
                                 await PriceService.shared.refresh()
                                 await store.refresh()
                             }
                         }
-                        Spacer()
+                        .controlSize(.small)
                     }
-                    .padding(.vertical, 8)
                 }
         }
         .font(.system(size: 12))
@@ -300,6 +273,15 @@ struct SettingsContent: View {
     private var priceFetched: String {
         guard let fetched = store.priceFetchedAt else { return "尚未获取" }
         return Format.stamp(fetched)
+    }
+
+    private var priceDetail: String {
+        let policy = "每 24 小时用 ETag 条件请求校验一次；失败时沿用上次结果"
+        switch store.priceOrigin {
+        case .network: return "最近更新 \(priceFetched)\n\(policy)"
+        case .stale: return "本次校验失败，沿用 \(priceFetched) 的结果\n\(policy)"
+        case .builtin: return "尚未联网获取\n\(policy)"
+        }
     }
 
     /// What the button writes: this binary in front of whatever is configured.
