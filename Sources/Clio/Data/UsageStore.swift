@@ -152,10 +152,13 @@ final class UsageStore: ObservableObject {
         let config = ClaudeConfigReader.read()
         // Fresh enough to trust: two polling periods, so raising the interval
         // in Settings doesn't make the panel drop the percentages in between.
+        let maxAge = prefs.quotaInterval * 2
         let liveLimits = RateLimitSnapshot.merged([feed, config].compactMap { $0 },
                                                   now: Date(),
-                                                  maxAge: prefs.quotaInterval * 2)
-        rateLimits = liveLimits
+                                                  maxAge: maxAge)
+        // A stale snapshot kept only for an ended window's reset time is not a
+        // reading Settings can report.
+        rateLimits = liveLimits.flatMap { Date().timeIntervalSince($0.updatedAt) < maxAge ? $0 : nil }
         let origin = await PriceService.shared.origin
         let fetchedAt = await PriceService.shared.lastFetch
 

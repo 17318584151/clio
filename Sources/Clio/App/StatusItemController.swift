@@ -84,10 +84,11 @@ final class StatusItemController {
 
     private func render() {
         let snapshot = sourceSnapshot
-        // The ring follows the 5-hour window. Plans without one, such as Codex
+        // The ring follows the 5-hour window. Codex plans without one, such as
         // Pro, report only the weekly allowance, so the ring uses that instead
         // of drawing an empty circle beside the usage figure.
-        let fraction = snapshot?.fiveHour.fraction ?? snapshot?.week.fraction
+        let fraction = snapshot?.fiveHour.fraction
+            ?? (snapshot?.tool == .codex ? snapshot?.week.fraction : nil)
         let text: String?
         switch prefs.menuBarDisplay {
         case .iconOnly:

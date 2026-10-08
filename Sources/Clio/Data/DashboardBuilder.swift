@@ -224,27 +224,23 @@ enum DashboardBuilder {
                                rejections: [QuotaRejection],
                                live: RateLimitWindow?,
                                now: Date) -> QuotaWindow {
+        // A reported window that has ended keeps only its reset time: its
+        // percentage is stale, and the history walk starts there.
+        let ended = live?.resetsAt.flatMap { $0 > now ? nil : $0 }
+        let running = ended == nil ? live : nil
         var start: Date?
         // A boundary is only ever taken from something that reported one: the
         // status-line feed, or a rate-limit rejection recorded in the log.
         var reported: Date?
-        if let feed = live?.resetsAt, feed > now {
+        if let feed = running?.resetsAt {
             start = feed.addingTimeInterval(-fiveHours)
             reported = feed
         } else if let latest = rejections.filter({ $0.resetsAt > now }).max(by: { $0.resetsAt < $1.resetsAt }) {
             start = latest.resetsAt.addingTimeInterval(-fiveHours)
             reported = latest.resetsAt
-        } else if let reset = live?.resetsAt {
-            // The reported window ended. Its percentage and tokens no longer
-            // apply; zero is known only until a new request consumes quota.
-            let used = events
-                .filter { $0.timestamp >= reset && $0.timestamp <= now }
-                .reduce(0) { $0 + $1.counts.total }
-            return QuotaWindow(title: "5 小时", used: used,
-                               fraction: used == 0 ? 0 : nil,
-                               resetsAt: reset, length: fiveHours)
         } else {
-            for event in events where event.timestamp > now.addingTimeInterval(-fiveHours * 40) {
+            let earliest = ended ?? now.addingTimeInterval(-fiveHours * 40)
+            for event in events where event.timestamp >= earliest {
                 guard let current = start else { start = event.timestamp; continue }
                 if event.timestamp >= current.addingTimeInterval(fiveHours) { start = event.timestamp }
             }
@@ -252,8 +248,9 @@ enum DashboardBuilder {
         }
 
         guard let start else {
-            return QuotaWindow(title: "5 小时", used: 0, fraction: live?.fraction,
-                               resetsAt: live?.resetsAt, length: fiveHours)
+            // No window has opened since the reported reset, so nothing is used.
+            return QuotaWindow(title: "5 小时", used: 0, fraction: ended == nil ? running?.fraction : 0,
+                               resetsAt: running?.resetsAt ?? ended, length: fiveHours)
         }
         let end = start.addingTimeInterval(fiveHours)
         let used = events
@@ -264,8 +261,8 @@ enum DashboardBuilder {
         // one closed, which continuous use makes meaningless.
         return QuotaWindow(title: "5 小时",
                            used: used,
-                           fraction: live?.fraction,
-                           resetsAt: live?.resetsAt ?? reported,
+                           fraction: running?.fraction,
+                           resetsAt: running?.resetsAt ?? reported ?? ended,
                            length: fiveHours)
     }
 
