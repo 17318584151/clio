@@ -234,6 +234,15 @@ enum DashboardBuilder {
         } else if let latest = rejections.filter({ $0.resetsAt > now }).max(by: { $0.resetsAt < $1.resetsAt }) {
             start = latest.resetsAt.addingTimeInterval(-fiveHours)
             reported = latest.resetsAt
+        } else if let reset = live?.resetsAt {
+            // The reported window ended. Its percentage and tokens no longer
+            // apply; zero is known only until a new request consumes quota.
+            let used = events
+                .filter { $0.timestamp >= reset && $0.timestamp <= now }
+                .reduce(0) { $0 + $1.counts.total }
+            return QuotaWindow(title: "5 小时", used: used,
+                               fraction: used == 0 ? 0 : nil,
+                               resetsAt: reset, length: fiveHours)
         } else {
             for event in events where event.timestamp > now.addingTimeInterval(-fiveHours * 40) {
                 guard let current = start else { start = event.timestamp; continue }

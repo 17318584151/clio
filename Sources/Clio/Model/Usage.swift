@@ -123,10 +123,10 @@ struct ModelUsage: Identifiable {
 /// A rolling quota window.
 ///
 /// `fraction` is the real utilisation Claude Code reports through its status
-/// line; it is nil when that feed isn't connected, and the row then shows the
-/// tokens observed locally instead of a percentage. The allowance behind the
-/// percentage is never a fixed token count — windows that hit the limit in the
-/// logs range from 53M to 206M tokens — so it is never inferred.
+/// line, or zero after a reported reset with no new local usage. When the
+/// percentage is unavailable, the row shows the tokens observed locally.
+/// The allowance behind the percentage is never a fixed token count — windows
+/// that hit the limit in the logs range from 53M to 206M tokens — so it is never inferred.
 struct QuotaWindow {
     let title: String
     let used: Int

@@ -104,7 +104,7 @@ private struct QuotaRow: View {
                     if let fraction = window.fraction {
                         Capsule()
                             .fill(theme.quotaColor(fraction))
-                            .frame(width: panelIsOpen ? max(3, geo.size.width * fraction) : 0)
+                            .frame(width: panelIsOpen && fraction > 0 ? max(3, geo.size.width * fraction) : 0)
                     }
                 }
                 // A 6pt bar is a small target; the hit area reaches past it

@@ -40,15 +40,18 @@ struct RateLimitSnapshot: Codable, Equatable {
     var modelScoped: [ScopedRateLimitWindow]
 
     /// The quota state to show, from every source at hand. A reading older
-    /// than `maxAge` is left out, and so is any window that has already reset.
+    /// than `maxAge` is left out. An expired 5-hour window is retained only
+    /// as a reset boundary, so the dashboard can start its usage at zero.
     /// Of the rest, the newest reading wins window by window, so a source
     /// lacking a window doesn't erase what another still reports.
     static func merged(_ sources: [RateLimitSnapshot], now: Date, maxAge: TimeInterval) -> RateLimitSnapshot? {
-        let usable = sources
+        let ordered = sources.sorted { $0.updatedAt > $1.updatedAt }
+        let usable = ordered
             .filter { now.timeIntervalSince($0.updatedAt) < maxAge }
-            .sorted { $0.updatedAt > $1.updatedAt }
-        guard var result = usable.first else { return nil }
+        guard var result = usable.first ?? ordered.first(where: { $0.fiveHour?.isCurrent(at: now) == false })
+        else { return nil }
         result.fiveHour = usable.lazy.compactMap(\.fiveHour).first { $0.isCurrent(at: now) }
+            ?? ordered.lazy.compactMap(\.fiveHour).first { !$0.isCurrent(at: now) }
         result.sevenDay = usable.lazy.compactMap(\.sevenDay).first { $0.isCurrent(at: now) }
         result.modelScoped = usable.lazy
             .map { $0.modelScoped.filter { $0.isCurrent(at: now) } }
