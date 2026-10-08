@@ -18,6 +18,8 @@ final class Updater: ObservableObject {
         let assetURL: URL
         /// Hex SHA-256 from the asset's `digest`, when GitHub reports one.
         let sha256: String?
+        /// The disk image's size in bytes.
+        let size: Int?
     }
 
     enum Phase: Equatable {
@@ -25,6 +27,8 @@ final class Updater: ObservableObject {
         case checking
         case upToDate
         case available(Release)
+        /// Downloading in the background ahead of an automatic install.
+        case downloading(Release)
         /// Downloaded and verified; installs once no window is open.
         case ready(Release)
         case installing(Release)
@@ -51,8 +55,7 @@ final class Updater: ObservableObject {
 
     private static let repository = "UreMySunshine/clio"
     private static let endpoint = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
-    /// The running version's release page; tags are the version prefixed with `v`.
-    static let currentPage = URL(string: "https://github.com/\(repository)/releases/tag/v\(currentVersion)")
+    static let releasesPage = URL(string: "https://github.com/\(repository)/releases")!
     private static let checkInterval: TimeInterval = 24 * 3600
     private static let lastCheckedKey = "lastUpdateCheck"
     private static let justUpdatedKey = "justUpdatedTo"
@@ -111,7 +114,7 @@ final class Updater: ObservableObject {
 
     func check() async {
         switch phase {
-        case .checking, .ready, .installing: return
+        case .checking, .downloading, .ready, .installing: return
         default: break
         }
         phase = .checking
@@ -163,7 +166,7 @@ final class Updater: ObservableObject {
     private func stage(_ release: Release) async {
         guard case .available(release) = phase, installsAutomatically, Self.canReplaceBundle else { return }
         if staged?.release != release {
-            phase = .installing(release)
+            phase = .downloading(release)
             do {
                 let download = try await Self.download(release)
                 discardStaged()
@@ -303,7 +306,8 @@ final class Updater: ObservableObject {
             value.hasPrefix("sha256:") ? String(value.dropFirst("sha256:".count)) : nil
         }
         let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-        return Release(version: version, pageURL: page, assetURL: download, sha256: digest)
+        return Release(version: version, pageURL: page, assetURL: download, sha256: digest,
+                       size: asset["size"] as? Int)
     }
 
     /// Numeric, component by component: 1.1.10 is newer than 1.1.9.

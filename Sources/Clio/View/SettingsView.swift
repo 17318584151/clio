@@ -28,6 +28,16 @@ struct SettingsView: View {
 }
 
 private extension View {
+    /// The pointing-hand pointer over a link, from macOS 15.
+    @ViewBuilder
+    func linkPointer() -> some View {
+        if #available(macOS 15, *) {
+            pointerStyle(.link)
+        } else {
+            self
+        }
+    }
+
     /// Fades a scroll view's edge on whichever side still has content out of
     /// view. Meant for scroll views without scroll bars, which it would fade
     /// too. Before macOS 15 the edges stay sharp.
@@ -104,7 +114,8 @@ struct SettingsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
                 group {
-                    row("100M Token 里程碑礼花") {
+                    row("100M Token 里程碑礼花",
+                        detail: "日、周或月累计每突破 100M 时全屏庆祝，不打断操作") {
                         HStack(spacing: 10) {
                             Button("预览", action: onPreviewConfetti)
                                 .controlSize(.small)
@@ -218,9 +229,7 @@ struct SettingsContent: View {
                 }
 
                 section("更新") {
-                    row(link("Clio \(Updater.currentVersion)", to: Updater.currentPage), detail: updateDetail) {
-                        updateAction
-                    }
+                    updateStatus
                     divider
                     row("自动检查更新") {
                         Toggle("", isOn: $prefs.autoCheckUpdates).labelsHidden()
@@ -280,16 +289,16 @@ struct SettingsContent: View {
     private func row<Trailing: View>(_ title: String,
                                      detail: String? = nil,
                                      @ViewBuilder trailing: () -> Trailing) -> some View {
-        row(Text(title), detail: detail.map { Text($0) }, trailing: trailing)
+        row(Text(title).foregroundStyle(theme.textPrimary), detail: detail.map { Text($0) }, trailing: trailing)
     }
 
     @ViewBuilder
-    private func row<Trailing: View>(_ title: Text,
-                                     detail: Text?,
-                                     @ViewBuilder trailing: () -> Trailing) -> some View {
+    private func row<Title: View, Trailing: View>(_ title: Title,
+                                                  detail: Text?,
+                                                  @ViewBuilder trailing: () -> Trailing) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
-                title.foregroundStyle(theme.textPrimary)
+                title
                 if let detail {
                     detail
                         .font(.system(size: 10))
@@ -303,62 +312,90 @@ struct SettingsContent: View {
         .padding(.vertical, 10)
     }
 
+    /// The update state: an icon tile with a title and sub line, then when it
+    /// was last checked and the button for the next step.
+    private var updateStatus: some View {
+        let face = UpdateFace(updater.phase, lastChecked: updater.lastChecked, theme: theme)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                UpdateIcon(icon: face.icon, tint: face.tint, quiet: face.quiet)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(face.title)
+                        .fontWeight(.medium)
+                        .foregroundStyle(theme.textPrimary)
+                    Group {
+                        if face.linksReleases {
+                            HStack(spacing: 0) {
+                                Text("从 ")
+                                LinkLabel(title: "GitHub Releases", url: Updater.releasesPage)
+                                Text(" 获取稳定版")
+                            }
+                        } else if let sub = face.sub {
+                            Text(sub)
+                        }
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textSecondary)
+                }
+            }
+            HStack {
+                Text("\(face.foot)\(face.stamp.map(stamp) ?? Text(""))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textSecondary)
+                Spacer()
+                updateButton(face)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .animation(.easeOut(duration: 0.18), value: updater.phase)
+    }
+
     @ViewBuilder
-    private var updateAction: some View {
-        switch updater.phase {
-        case .checking:
-            ProgressView().controlSize(.small)
-        case .installing:
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("正在更新…").foregroundStyle(theme.textSecondary)
+    private func updateButton(_ face: UpdateFace) -> some View {
+        let button = Button(action: performUpdateStep) {
+            if let icon = face.buttonIcon {
+                Label(face.button, systemImage: icon).labelStyle(.titleAndIcon)
+            } else {
+                Text(face.button)
             }
-        case .available(let release), .ready(let release):
-            Button("更新到 \(release.version)") {
-                Task { await updater.install(release) }
-            }
-            .controlSize(.small)
-        case .idle, .upToDate, .failed:
-            Button("检查更新") {
-                Task { await updater.check() }
-            }
-            .controlSize(.small)
+        }
+        .controlSize(.small)
+        .disabled(face.busy)
+        if face.prominent {
+            button.buttonStyle(.borderedProminent)
+        } else {
+            button
         }
     }
 
-    /// Text in the highlight color that opens `url` in the browser.
-    private func link(_ title: String, to url: URL?) -> Text {
-        var text = AttributedString(title)
-        text.link = url
-        text.foregroundColor = theme.accent
-        return Text(text).fontWeight(.medium)
+    private func performUpdateStep() {
+        switch updater.phase {
+        case .idle, .upToDate, .failed:
+            Task { await updater.check() }
+        case .available(let release), .ready(let release):
+            Task { await updater.install(release) }
+        case .checking, .downloading, .installing:
+            break
+        }
     }
 
-    /// A time something was last fetched, in the highlight color.
+    /// A time something was last fetched, darker and heavier than the grey
+    /// label around it.
     private func stamp(_ date: Date) -> Text {
         Text(Format.stamp(date))
             .fontWeight(.medium)
-            .foregroundStyle(theme.accent)
+            .foregroundStyle(theme.textPrimary)
     }
 
-    private var updateDetail: Text {
-        let checked = updater.lastChecked.map { Text("上次检查 \(stamp($0))") } ?? Text("尚未检查")
-        switch updater.phase {
-        case .idle: return checked
-        case .checking: return Text("正在检查…")
-        case .upToDate: return Text("已是最新 · \(checked)")
-        case .available(let release):
-            return Text("发现新版本 \(link(release.version, to: release.pageURL))，下载后替换当前应用并重启")
-        case .ready(let release):
-            return Text("已下载 \(link(release.version, to: release.pageURL))，弹出层与设置窗口都关闭后替换并重启")
-        case .installing(let release):
-            return Text("正在下载并安装 \(link(release.version, to: release.pageURL))")
-        case .failed(let message): return Text(message)
+    @ViewBuilder
+    private var priceSource: some View {
+        if store.priceOrigin == .builtin {
+            Text("内置价格").foregroundStyle(theme.textPrimary)
+        } else {
+            LinkLabel(title: "models.dev", url: URL(string: "https://models.dev")!)
+                .fontWeight(.medium)
         }
-    }
-
-    private var priceSource: Text {
-        store.priceOrigin == .builtin ? Text("内置价格") : link("models.dev", to: URL(string: "https://models.dev"))
     }
 
     private var priceDetail: Text {
@@ -406,11 +443,11 @@ struct SettingsContent: View {
         return "已读取 · \(Format.clock(snapshot.updatedAt))"
     }
 
-    private var liveDetail: String? {
+    private var liveDetail: String {
         guard UsageProbe.executable != nil else {
             return "找不到 claude 命令行，5 小时、本周与模型额度只能显示 Token 数"
         }
-        return nil
+        return "展开面板时问一次，其余按下面的频率；失败时沿用上次结果"
     }
 
     private func binding(_ key: ReferenceWritableKeyPath<Preferences, [String: String]>, _ tool: Tool) -> Binding<String> {
@@ -448,5 +485,134 @@ private struct StatusDot: View {
                         }
                 }
             }
+    }
+}
+
+/// Text in the accent color that opens `url` in the browser, underlined while
+/// the pointer is over it.
+private struct LinkLabel: View {
+    let title: String
+    let url: URL
+
+    @Environment(\.theme) private var theme
+    @Environment(\.openURL) private var openURL
+    @State private var isHovered = false
+
+    var body: some View {
+        Button { openURL(url) } label: {
+            Text(title)
+                .underline(isHovered)
+                .foregroundStyle(theme.accent)
+        }
+        .buttonStyle(.plain)
+        .linkPointer()
+        .onHover { isHovered = $0 }
+    }
+}
+
+/// The update block's icon, wording and button in each phase.
+@MainActor
+private struct UpdateFace {
+    enum Icon { case download, done, warning, busy }
+
+    var icon: Icon
+    var tint: Color
+    /// A grey tile rather than one tinted with `tint`.
+    var quiet = false
+    var title: String
+    var sub: String?
+    /// The sub line reads 从 GitHub Releases 获取稳定版, with the link.
+    var linksReleases = false
+    var foot: String
+    /// Follows `foot`, set apart from it.
+    var stamp: Date?
+    var button: String
+    /// An SF Symbol before the button's title.
+    var buttonIcon: String?
+    var prominent = false
+    var busy = false
+
+    init(_ phase: Updater.Phase, lastChecked: Date?, theme: Theme) {
+        let current = Updater.currentVersion
+        let last = lastChecked == nil ? "尚未检查" : "上次检查 "
+        switch phase {
+        case .idle:
+            icon = .download; tint = theme.textSecondary; quiet = true
+            title = "Clio \(current)"; linksReleases = true
+            foot = last; stamp = lastChecked
+            button = "检查更新"; buttonIcon = "arrow.clockwise"
+        case .checking:
+            icon = .busy; tint = theme.accent
+            title = "正在检查更新…"; sub = "连接 github.com"
+            foot = "通常需要几秒"
+            button = "检查中"; busy = true
+        case .upToDate:
+            icon = .done; tint = theme.positive
+            title = "已是最新版本"; sub = "Clio \(current)"
+            foot = last; stamp = lastChecked
+            button = "再次检查"; buttonIcon = "arrow.clockwise"
+        case .available(let release):
+            icon = .download; tint = theme.accent
+            title = "Clio \(release.version) 可更新"; sub = release.size.map(Self.megabytes)
+            foot = "当前 \(current)"
+            button = "下载并安装"; buttonIcon = "arrow.down"; prominent = true
+        case .downloading(let release):
+            icon = .busy; tint = theme.accent
+            title = "正在下载 \(release.version)"; sub = release.size.map { "共 \(Self.megabytes($0))" }
+            foot = "下载完成后自动安装"
+            button = "下载中"; busy = true
+        case .ready(let release):
+            icon = .done; tint = theme.positive
+            title = "\(release.version) 已准备就绪"; sub = "弹出层与设置窗口都关闭后自动安装并重启"
+            foot = release.size.map { "已下载 \(Self.megabytes($0))" } ?? "已下载"
+            button = "立即重启"; buttonIcon = "arrow.clockwise"; prominent = true
+        case .installing(let release):
+            icon = .busy; tint = theme.accent
+            title = "正在安装 \(release.version)…"; sub = "请勿退出 Clio"
+            foot = "完成后自动重新启动"
+            button = "安装中"; busy = true
+        case .failed(let message):
+            icon = .warning; tint = theme.danger
+            title = "更新没有完成"; sub = message
+            foot = last; stamp = lastChecked
+            button = "重试"; buttonIcon = "arrow.clockwise"
+        }
+    }
+
+    private static func megabytes(_ bytes: Int) -> String {
+        String(format: "%.1f MB", Double(bytes) / 1_048_576)
+    }
+}
+
+/// The update block's leading tile: a glyph, or an arc turning while busy.
+private struct UpdateIcon: View {
+    var icon: UpdateFace.Icon
+    var tint: Color
+    var quiet: Bool
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Group {
+            switch icon {
+            case .download: Image(systemName: "arrow.down")
+            case .done: Image(systemName: "checkmark")
+            case .warning: Image(systemName: "exclamationmark.triangle")
+            case .busy:
+                TimelineView(.animation) { context in
+                    let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
+                    Circle()
+                        .trim(from: 0, to: 0.75)
+                        .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .frame(width: 13, height: 13)
+                        .rotationEffect(.degrees(turn * 360))
+                }
+            }
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(tint)
+        .frame(width: 30, height: 30)
+        .background(quiet ? theme.segmentedFill : tint.opacity(0.14),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
