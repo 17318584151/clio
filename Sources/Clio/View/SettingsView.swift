@@ -6,12 +6,85 @@ import SwiftUI
 struct SettingsView: View {
     var onPreviewConfetti: () -> Void = {}
 
+    @EnvironmentObject private var prefs: Preferences
     @Environment(\.colorScheme) private var scheme
 
+    /// The window turns clear at the same time, so the glass shows the desktop.
+    private var usesGlass: Bool { prefs.liquidGlass && LiquidGlass.isAvailable }
+
     var body: some View {
+        let theme = Theme.resolve(scheme)
         ScrollView { SettingsContent(onPreviewConfetti: onPreviewConfetti) }
+            .scrollIndicators(.never)
+            .edgeFade()
             .frame(width: 420, height: 640)
-            .background(Theme.resolve(scheme).panelFill)
+            .background(usesGlass ? .clear : theme.panelFill)
+            .background {
+                Color.clear
+                    .liquidGlass(usesGlass, in: Rectangle(), tint: theme.glassTint)
+                    .ignoresSafeArea()
+            }
+    }
+}
+
+private extension View {
+    /// Fades a scroll view's edge on whichever side still has content out of
+    /// view. Meant for scroll views without scroll bars, which it would fade
+    /// too. Before macOS 15 the edges stay sharp.
+    @ViewBuilder
+    func edgeFade(_ length: CGFloat = 44) -> some View {
+        if #available(macOS 15, *) {
+            modifier(EdgeFade(length: length))
+        } else {
+            self
+        }
+    }
+}
+
+@available(macOS 15, *)
+private struct EdgeFade: ViewModifier {
+    let length: CGFloat
+    @State private var hidden = Hidden()
+
+    struct Hidden: Equatable {
+        var above = false
+        var below = false
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Hidden.self) { g in
+                // Content runs under the title bar, so at rest the offset is
+                // minus that inset rather than zero.
+                Hidden(above: g.contentOffset.y + g.contentInsets.top > 0.5,
+                       below: g.visibleRect.maxY < g.contentSize.height - 0.5)
+            } action: { _, now in
+                withAnimation(.easeOut(duration: 0.15)) { hidden = now }
+            }
+            .mask {
+                VStack(spacing: 0) {
+                    edge(.top, faded: hidden.above)
+                    Color.black
+                    edge(.bottom, faded: hidden.below)
+                }
+            }
+    }
+
+    /// The outer half drops close to nothing, so the row at the very edge all
+    /// but disappears and reads as more to come. Opaque when not faded.
+    private func edge(_ side: VerticalEdge, faded: Bool) -> some View {
+        ZStack {
+            Color.black.opacity(faded ? 0 : 1)
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.2), location: 0.45),
+                    .init(color: .black, location: 1),
+                ],
+                startPoint: side == .top ? .top : .bottom,
+                endPoint: side == .top ? .bottom : .top)
+        }
+        .frame(height: length)
     }
 }
 
@@ -31,8 +104,7 @@ struct SettingsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
                 group {
-                    row("100M Token 里程碑礼花",
-                        detail: "日、周或月累计每突破 100M 时全屏庆祝，不打断操作") {
+                    row("100M Token 里程碑礼花") {
                         HStack(spacing: 10) {
                             Button("预览", action: onPreviewConfetti)
                                 .controlSize(.small)
@@ -41,7 +113,7 @@ struct SettingsContent: View {
                     }
                     if LiquidGlass.isAvailable {
                         divider
-                        row("液态玻璃", detail: "面板背景与切换控件使用 macOS 26 的液态玻璃材质", experimental: true) {
+                        row("液态玻璃") {
                             Toggle("", isOn: $prefs.liquidGlass).labelsHidden()
                         }
                     }
@@ -137,9 +209,7 @@ struct SettingsContent: View {
                             Text(tool.logDirectoryDisplay)
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(theme.textSecondary)
-                            Circle()
-                                .fill(store.dashboard.snapshot(for: tool) != nil ? theme.positive : theme.textTertiary)
-                                .frame(width: 6, height: 6)
+                            StatusDot(isLive: store.dashboard.snapshot(for: tool) != nil)
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
@@ -148,22 +218,22 @@ struct SettingsContent: View {
                 }
 
                 section("更新") {
-                    row("Clio \(Updater.currentVersion)", detail: updateDetail) {
+                    row(link("Clio \(Updater.currentVersion)", to: Updater.currentPage), detail: updateDetail) {
                         updateAction
                     }
                     divider
-                    row("自动检查更新", detail: "启动时与每 24 小时查询一次 GitHub Releases") {
+                    row("自动检查更新") {
                         Toggle("", isOn: $prefs.autoCheckUpdates).labelsHidden()
                     }
                     divider
-                    row("自动安装更新", detail: "在后台下载新版本，弹出层与设置窗口都关闭时替换并重启") {
+                    row("自动安装更新") {
                         Toggle("", isOn: $prefs.autoInstallUpdates).labelsHidden()
                             .disabled(!prefs.autoCheckUpdates)
                     }
                 }
 
                 section("价格表") {
-                    row(store.priceOrigin == .builtin ? "内置价格" : "models.dev", detail: priceDetail) {
+                    row(priceSource, detail: priceDetail) {
                         Button("立即更新") {
                             Task {
                                 await PriceService.shared.refresh()
@@ -207,26 +277,21 @@ struct SettingsContent: View {
         }
     }
 
-    @ViewBuilder
     private func row<Trailing: View>(_ title: String,
                                      detail: String? = nil,
-                                     experimental: Bool = false,
+                                     @ViewBuilder trailing: () -> Trailing) -> some View {
+        row(Text(title), detail: detail.map { Text($0) }, trailing: trailing)
+    }
+
+    @ViewBuilder
+    private func row<Trailing: View>(_ title: Text,
+                                     detail: Text?,
                                      @ViewBuilder trailing: () -> Trailing) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(title).foregroundStyle(theme.textPrimary)
-                    if experimental {
-                        Text("实验性")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(theme.warning)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(theme.warning.opacity(0.14), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    }
-                }
+                title.foregroundStyle(theme.textPrimary)
                 if let detail {
-                    Text(detail)
+                    detail
                         .font(.system(size: 10))
                         .foregroundStyle(theme.textSecondary)
                 }
@@ -261,30 +326,47 @@ struct SettingsContent: View {
         }
     }
 
-    private var updateDetail: String {
-        let checked = updater.lastChecked.map { "上次检查 \(Format.stamp($0))" } ?? "尚未检查"
+    /// Text in the highlight color that opens `url` in the browser.
+    private func link(_ title: String, to url: URL?) -> Text {
+        var text = AttributedString(title)
+        text.link = url
+        text.foregroundColor = theme.accent
+        return Text(text).fontWeight(.medium)
+    }
+
+    /// A time something was last fetched, in the highlight color.
+    private func stamp(_ date: Date) -> Text {
+        Text(Format.stamp(date))
+            .fontWeight(.medium)
+            .foregroundStyle(theme.accent)
+    }
+
+    private var updateDetail: Text {
+        let checked = updater.lastChecked.map { Text("上次检查 \(stamp($0))") } ?? Text("尚未检查")
         switch updater.phase {
         case .idle: return checked
-        case .checking: return "正在检查…"
-        case .upToDate: return "已是最新 · \(checked)"
-        case .available(let release): return "发现新版本 \(release.version)，下载后替换当前应用并重启"
-        case .ready(let release): return "已下载 \(release.version)，弹出层与设置窗口都关闭后替换并重启"
-        case .installing(let release): return "正在下载并安装 \(release.version)"
-        case .failed(let message): return message
+        case .checking: return Text("正在检查…")
+        case .upToDate: return Text("已是最新 · \(checked)")
+        case .available(let release):
+            return Text("发现新版本 \(link(release.version, to: release.pageURL))，下载后替换当前应用并重启")
+        case .ready(let release):
+            return Text("已下载 \(link(release.version, to: release.pageURL))，弹出层与设置窗口都关闭后替换并重启")
+        case .installing(let release):
+            return Text("正在下载并安装 \(link(release.version, to: release.pageURL))")
+        case .failed(let message): return Text(message)
         }
     }
 
-    private var priceFetched: String {
-        guard let fetched = store.priceFetchedAt else { return "尚未获取" }
-        return Format.stamp(fetched)
+    private var priceSource: Text {
+        store.priceOrigin == .builtin ? Text("内置价格") : link("models.dev", to: URL(string: "https://models.dev"))
     }
 
-    private var priceDetail: String {
-        let policy = "每 24 小时用 ETag 条件请求校验一次；失败时沿用上次结果"
+    private var priceDetail: Text {
+        guard let fetched = store.priceFetchedAt else { return Text("尚未联网获取") }
         switch store.priceOrigin {
-        case .network: return "最近更新 \(priceFetched)\n\(policy)"
-        case .stale: return "本次校验失败，沿用 \(priceFetched) 的结果\n\(policy)"
-        case .builtin: return "尚未联网获取\n\(policy)"
+        case .network: return Text("最近更新 \(stamp(fetched))")
+        case .stale: return Text("本次校验失败，沿用 \(stamp(fetched)) 的结果")
+        case .builtin: return Text("尚未联网获取")
         }
     }
 
@@ -324,11 +406,11 @@ struct SettingsContent: View {
         return "已读取 · \(Format.clock(snapshot.updatedAt))"
     }
 
-    private var liveDetail: String {
+    private var liveDetail: String? {
         guard UsageProbe.executable != nil else {
             return "找不到 claude 命令行，5 小时、本周与模型额度只能显示 Token 数"
         }
-        return "展开面板时问一次，其余按下面的频率；失败时沿用上次结果"
+        return nil
     }
 
     private func binding(_ key: ReferenceWritableKeyPath<Preferences, [String: String]>, _ tool: Tool) -> Binding<String> {
@@ -338,4 +420,33 @@ struct SettingsContent: View {
         )
     }
 
+}
+
+/// A data source's status dot. While the source has data, a ring of the same
+/// green keeps spreading out from the dot and fading.
+private struct StatusDot: View {
+    var isLive: Bool
+
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Circle()
+            .fill(isLive ? theme.positive : theme.textTertiary)
+            .frame(width: 6, height: 6)
+            .background {
+                if isLive && !reduceMotion {
+                    Circle()
+                        .fill(theme.positive)
+                        .phaseAnimator([false, true]) { ring, spreading in
+                            ring
+                                .scaleEffect(spreading ? 2.6 : 1)
+                                .opacity(spreading ? 0 : 0.5)
+                        } animation: { spreading in
+                            // The ring snaps back to the dot's size, hidden behind it.
+                            spreading ? .easeOut(duration: 1.6).delay(0.6) : nil
+                        }
+                }
+            }
+    }
 }
