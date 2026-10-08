@@ -7,6 +7,12 @@ import Foundation
 /// the delta is accumulated. `input_tokens` there already includes the cached
 /// portion reported separately as `cached_input_tokens`.
 ///
+/// A `token_count` line also carries `rate_limits`: `used_percent` and
+/// `resets_at` for each window. A window of a day or longer is the weekly
+/// allowance (10080 minutes). Shorter ones, when Codex sends them, are the
+/// 5-hour allowance. The newest reading wins; a line with no windows does not
+/// erase it. Nothing is asked of the network.
+///
 /// Each rollout file is one thread. `session_meta.session_id` is the
 /// conversation it belongs to, and subagent threads repeat their parent's id,
 /// so the activity card can count conversations instead of files. The file
@@ -15,6 +21,12 @@ import Foundation
 /// The shape below is the Codex CLI rollout format. Fields are read defensively
 /// and a line that doesn't match is skipped rather than failing the scan.
 final class CodexReader {
+    struct Reading {
+        var events: [UsageEvent]
+        var quota: RateLimitSnapshot?
+        var plan: String?
+    }
+
     private let scanner = LogScanner(root: Tool.codex.logDirectory)
     private var events: [String: UsageEvent] = [:]
     /// Latest model named in each session file. Subagent sessions log a
@@ -24,6 +36,9 @@ final class CodexReader {
     private var sessionIDs: [String: String] = [:]
     /// Latest `total_token_usage` seen in each session file.
     private var totals: [String: Int] = [:]
+    /// Newest quota snapshot seen in any session file.
+    private var quota: RateLimitSnapshot?
+    private var planName: String?
 
     var isAvailable: Bool { scanner.rootExists }
 
@@ -34,7 +49,7 @@ final class CodexReader {
     private static let contextMarker = Array("turn_context".utf8)
     private static let sessionMarker = Array("session_meta".utf8)
 
-    func refresh() -> [UsageEvent] {
+    func refresh(now: Date = Date()) -> Reading {
         scanner.scan { file, line in
             guard ByteSearch.contains(line, Self.usageMarker)
                     || ByteSearch.contains(line, Self.contextMarker)
@@ -45,9 +60,9 @@ final class CodexReader {
             else { return }
             ingest(object, file: file)
         }
-        let cutoff = Date().addingTimeInterval(-LogScanner.retention)
+        let cutoff = now.addingTimeInterval(-LogScanner.retention)
         events = events.filter { $0.value.timestamp > cutoff }
-        return Array(events.values)
+        return Reading(events: Array(events.values), quota: currentQuota(at: now), plan: planName)
     }
 
     private func ingest(_ object: [String: Any], file: String) {
@@ -66,9 +81,14 @@ final class CodexReader {
         }
 
         guard payload["type"] as? String == "token_count",
-              let info = payload["info"] as? [String: Any],
-              let last = info["last_token_usage"] as? [String: Any]
+              let info = payload["info"] as? [String: Any]
         else { return }
+
+        let stamp = (object["timestamp"] as? String) ?? ""
+        let timestamp = ISO8601.date(from: stamp)
+        if let timestamp { noteQuota(payload["rate_limits"], at: timestamp) }
+
+        guard let last = info["last_token_usage"] as? [String: Any] else { return }
 
         if let model = info["model"] as? String, !model.isEmpty {
             models[file] = model
@@ -82,8 +102,7 @@ final class CodexReader {
             totals[file] = total
         }
 
-        let stamp = (object["timestamp"] as? String) ?? ""
-        guard let timestamp = ISO8601.date(from: stamp) else { return }
+        guard let timestamp else { return }
 
         let input = last["input_tokens"] as? Int ?? 0
         let cached = last["cached_input_tokens"] as? Int ?? 0
@@ -100,5 +119,67 @@ final class CodexReader {
                                  counts: counts,
                                  dedupeKey: key,
                                  sessionID: sessionIDs[file] ?? file)
+    }
+
+    /// A day or longer is the weekly allowance. Anything shorter is the 5-hour
+    /// one. Codex currently sends only the 7-day window (`10080` minutes) on
+    /// `primary` and leaves `secondary` empty.
+    private func noteQuota(_ value: Any?, at timestamp: Date) {
+        guard let limits = value as? [String: Any] else { return }
+        if let existing = quota?.updatedAt, timestamp <= existing { return }
+
+        var fiveHour: RateLimitWindow?
+        var week: RateLimitWindow?
+        for key in ["primary", "secondary"] {
+            guard let entry = limits[key] as? [String: Any],
+                  let window = Self.quotaWindow(entry)
+            else { continue }
+            let minutes = Self.number(entry["window_minutes"]) ?? 0
+            if minutes >= 24 * 60 {
+                week = window
+            } else if minutes > 0 {
+                fiveHour = window
+            }
+        }
+        // A payload that only carries one window must not wipe the other.
+        // Codex sends the 7-day window alone and leaves the 5-hour one empty.
+        guard fiveHour != nil || week != nil else { return }
+        if fiveHour == nil { fiveHour = quota?.fiveHour }
+        if week == nil { week = quota?.sevenDay }
+        quota = RateLimitSnapshot(updatedAt: timestamp,
+                                  fiveHour: fiveHour,
+                                  sevenDay: week,
+                                  modelScoped: [])
+        if let plan = limits["plan_type"] as? String {
+            planName = PlanReader.displayName(for: plan)
+        }
+    }
+
+    /// Drop a window whose reset time has passed. The next `token_count` is
+    /// what replaces it; until then the old percentage belongs to a closed week.
+    private func currentQuota(at now: Date) -> RateLimitSnapshot? {
+        guard var snap = quota else { return nil }
+        if let week = snap.sevenDay, !week.isCurrent(at: now) { snap.sevenDay = nil }
+        if let five = snap.fiveHour, !five.isCurrent(at: now) { snap.fiveHour = nil }
+        guard snap.fiveHour != nil || snap.sevenDay != nil else { return nil }
+        return snap
+    }
+
+    private static func quotaWindow(_ entry: [String: Any]) -> RateLimitWindow? {
+        guard let percent = number(entry["used_percent"]) else { return nil }
+        return RateLimitWindow(usedPercentage: percent, resetsAt: date(entry["resets_at"]))
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        if let number = value as? Double { return number }
+        if let number = value as? Int { return Double(number) }
+        return nil
+    }
+
+    private static func date(_ value: Any?) -> Date? {
+        if let seconds = value as? Double { return Date(timeIntervalSince1970: seconds) }
+        if let seconds = value as? Int { return Date(timeIntervalSince1970: Double(seconds)) }
+        if let text = value as? String { return ISO8601.date(from: text) }
+        return nil
     }
 }

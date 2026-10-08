@@ -12,6 +12,8 @@ actor LogReaders {
         var claudeEvents: [UsageEvent] = []
         var claudeRejections: [QuotaRejection] = []
         var codexEvents: [UsageEvent] = []
+        var codexQuota: RateLimitSnapshot?
+        var codexPlan: String?
         var claudeAvailable = false
         var codexAvailable = false
     }
@@ -26,7 +28,10 @@ actor LogReaders {
             result.claudeRejections = parsed.rejections
         }
         if result.codexAvailable {
-            result.codexEvents = codex.refresh()
+            let parsed = codex.refresh()
+            result.codexEvents = parsed.events
+            result.codexQuota = parsed.quota
+            result.codexPlan = parsed.plan
         }
         return result
     }
@@ -54,11 +59,14 @@ actor LogReaders {
                                                        ledger: ledger))
         }
         if parsed.codexAvailable && !parsed.codexEvents.isEmpty {
+            var config = quota[.codex] ?? .init()
+            if config.rateLimits == nil { config.rateLimits = parsed.codexQuota }
+            if config.planName == nil { config.planName = parsed.codexPlan }
             snapshots.append(DashboardBuilder.snapshot(tool: .codex,
                                                        events: parsed.codexEvents,
                                                        rejections: [],
                                                        prices: prices,
-                                                       quota: quota[.codex] ?? .init()))
+                                                       quota: config))
         }
         return snapshots
     }
