@@ -39,14 +39,6 @@ enum Appearance: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
-        switch self {
-        case .system: return "跟随系统"
-        case .light: return "浅色"
-        case .dark: return "深色"
-        }
-    }
-
     var symbol: String {
         switch self {
         case .system: return "circle.lefthalf.filled"
