@@ -45,7 +45,7 @@ macOS 菜单栏里的 Claude Code / Codex 用量面板：额度还剩多少、�
 
 <p align="center"><img src="docs/confetti.png" width="420" alt="里程碑礼花"></p>
 
-日、周或月累计每突破 100M Token 时全屏庆祝，约 5 秒后自动消失，透明且可点穿，不打断手上的操作。设置里可预览、可关闭。
+Claude Code 和 Codex 分别统计，任一工具的日、周或月累计每突破 100M Token 时全屏庆祝，约 5 秒后自动消失，透明且可点穿，不打断手上的操作。设置里可预览、可关闭。
 
 ### 其它
 

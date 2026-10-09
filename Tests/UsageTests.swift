@@ -18,11 +18,16 @@ enum UsageTests {
         testQuotaVisibility()
         testUnknownPrices()
         testZeroPrice()
+        testToolMilestones()
+        testNewToolMilestones()
+        try testMilestonePersistence()
+        testMilestonePeriods()
+        testLegacyMilestones()
         guard failures == 0 else {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("9 usage regression scenarios passed")
+        print("14 usage regression scenarios passed")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -141,6 +146,8 @@ enum UsageTests {
         expect(counts.input == 200 && counts.cacheRead == 600 && counts.cacheWrite == 200,
                "input must separate cache reads and writes")
         expect(counts.output == 100 && counts.total == 1100, "cache writes and reasoning must not double the total")
+        expect(snapshot(result.events).totals[.day]?.cacheWrite == 200,
+               "reported cache writes must reach the dashboard")
         expect(abs((prices.cost(counts, model: "gpt-priced") ?? 0) - 0.00202) < 1e-12,
                "cache writes must use their price")
     }
@@ -183,5 +190,77 @@ enum UsageTests {
         let result = snapshot([event], prices: free)
         expect(result.costs[.day] == 0 && result.models[.day]?.first?.cost == 0,
                "a known zero price must remain zero")
+    }
+
+    private static func milestoneState(claude: Int? = nil, codex: Int? = nil, at date: Date? = nil) -> MilestoneState {
+        let snapshots = [(Tool.claudeCode, claude), (.codex, codex)].compactMap { tool, tokens -> ToolSnapshot? in
+            guard let tokens else { return nil }
+            let event = UsageEvent(timestamp: now, model: "gpt-priced", counts: .init(input: tokens), dedupeKey: tool.rawValue)
+            return snapshot([event], tool: tool)
+        }
+        return Milestones.state(snapshots: snapshots, at: date ?? now)
+    }
+
+    private static func testToolMilestones() {
+        let initial = milestoneState(claude: 60_000_000, codex: 30_000_000)
+        let combined100 = milestoneState(claude: 60_000_000, codex: 40_000_000)
+        expect(!Milestones.shouldCelebrate(previous: initial, current: combined100),
+               "Claude Code 60M and Codex 40M must not trigger a combined milestone")
+        let claude100 = milestoneState(claude: 100_000_000, codex: 40_000_000)
+        expect(Milestones.shouldCelebrate(previous: combined100, current: claude100),
+               "Claude Code must celebrate its own 100M crossing")
+        let both100 = milestoneState(claude: 100_000_000, codex: 100_000_000)
+        expect(Milestones.shouldCelebrate(previous: claude100, current: both100),
+               "Codex must celebrate its own 100M crossing after Claude Code")
+    }
+
+    private static func testNewToolMilestones() {
+        let claude = milestoneState(claude: 100_000_000)
+        expect(!Milestones.shouldCelebrate(previous: nil, current: claude), "first scan must establish a baseline")
+        let addedCodex = milestoneState(claude: 100_000_000, codex: 200_000_000)
+        expect(!Milestones.shouldCelebrate(previous: claude, current: addedCodex),
+               "a newly detected tool must establish its own baseline")
+        expect(Milestones.shouldCelebrate(previous: addedCodex,
+                                          current: milestoneState(claude: 100_000_000, codex: 300_000_000)),
+               "a new tool must celebrate subsequent crossings")
+    }
+
+    private static func testMilestonePersistence() throws {
+        let original = milestoneState(claude: 200_000_000, codex: 100_000_000)
+        let restored = try JSONDecoder().decode(MilestoneState.self, from: JSONEncoder().encode(original))
+        expect(!Milestones.shouldCelebrate(previous: restored, current: original),
+               "a restart must not replay completed milestones")
+        let partial = Milestones.merged(previous: restored, current: milestoneState(claude: 100_000_000))
+        expect(!Milestones.shouldCelebrate(previous: partial, current: original),
+               "partial reads must retain each tool's completed milestones")
+    }
+
+    private static func testMilestonePeriods() {
+        let previous = milestoneState(claude: 100_000_000, codex: 100_000_000)
+        for period in Granularity.allCases {
+            var current = previous
+            switch period {
+            case .day: current.tools[Tool.codex.rawValue]?.dayFloor += 1
+            case .week: current.tools[Tool.codex.rawValue]?.weekFloor += 1
+            case .month: current.tools[Tool.codex.rawValue]?.monthFloor += 1
+            }
+            expect(Milestones.shouldCelebrate(previous: previous, current: current),
+                   "each tool's \(period) crossing must trigger a celebration")
+        }
+        let nextYear = Calendar.current.date(byAdding: .year, value: 1, to: now)!
+        let reset = milestoneState(claude: 200_000_000, codex: 200_000_000, at: nextYear)
+        expect(!Milestones.shouldCelebrate(previous: previous, current: reset),
+               "new calendar periods must establish new baselines")
+        expect(Milestones.merged(previous: previous, current: reset) == reset,
+               "completed floors must reset with their calendar periods")
+    }
+
+    private static func testLegacyMilestones() {
+        let legacy = Data(#"{"dayID":"2026-10-09","dayFloor":1,"weekID":"2026-W41","weekFloor":2,"monthID":"2026-10","monthFloor":3}"#.utf8)
+        let restored = try? JSONDecoder().decode(MilestoneState.self, from: legacy)
+        expect(restored == nil, "legacy combined milestones must establish per-tool baselines")
+        expect(!Milestones.shouldCelebrate(previous: restored,
+                                           current: milestoneState(claude: 200_000_000, codex: 100_000_000)),
+               "migration from combined milestones must not celebrate existing usage")
     }
 }

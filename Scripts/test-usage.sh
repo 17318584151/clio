@@ -10,6 +10,7 @@ swiftc -swift-version 5 -module-cache-path "$scratch/module-cache" \
     "$root/Sources/Clio/Model/Usage.swift" \
     "$root/Sources/Clio/Model/RateLimits.swift" \
     "$root/Sources/Clio/Model/Pricing.swift" \
+    "$root/Sources/Clio/Model/Milestones.swift" \
     "$root/Sources/Clio/Data/LogScanner.swift" \
     "$root/Sources/Clio/Data/ClaudeCodeReader.swift" \
     "$root/Sources/Clio/Data/CodexReader.swift" \

@@ -221,11 +221,8 @@ final class UsageStore: ObservableObject {
     /// All three periods are watched: a calendar week can straddle a month
     /// boundary, and the day is what the panel shows by default.
     private func checkMilestone(_ snapshots: [ToolSnapshot]) {
-        let day = snapshots.reduce(0) { $0 + ($1.totals[.day]?.total ?? 0) }
-        let week = snapshots.reduce(0) { $0 + ($1.totals[.week]?.total ?? 0) }
-        let month = snapshots.reduce(0) { $0 + ($1.totals[.month]?.total ?? 0) }
         let previous = prefs.loadMilestones()
-        let current = Milestones.state(dayTokens: day, weekTokens: week, monthTokens: month, at: Date())
+        let current = Milestones.state(snapshots: snapshots, at: Date())
         let fire = Milestones.shouldCelebrate(previous: previous, current: current)
         prefs.saveMilestones(Milestones.merged(previous: previous, current: current))
         if fire && prefs.confettiEnabled {

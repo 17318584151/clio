@@ -115,7 +115,7 @@ struct SettingsContent: View {
         VStack(alignment: .leading, spacing: 14) {
                 group {
                     row("100M Token 里程碑礼花",
-                        detail: "日、周或月累计每突破 100M 时全屏庆祝，不打断操作") {
+                        detail: "各工具分别统计，日、周或月累计每突破 100M 时全屏庆祝") {
                         HStack(spacing: 10) {
                             Button("预览", action: onPreviewConfetti)
                                 .controlSize(.small)
