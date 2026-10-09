@@ -44,13 +44,13 @@ actor LogReaders {
 
         var snapshots: [ToolSnapshot] = []
         if parsed.claudeAvailable && !parsed.claudeEvents.isEmpty {
-            let stored = UsageLedger.load()
+            let stored = UsageLedger.load(for: .claudeCode)
             let ledger = UsageLedger.updated(stored,
                                              events: parsed.claudeEvents,
                                              history: history,
                                              now: Date(),
                                              retentionDays: UsageLedger.retentionDays())
-            if ledger != stored { ledger.save() }
+            if ledger != stored { ledger.save(for: .claudeCode) }
             snapshots.append(DashboardBuilder.snapshot(tool: .claudeCode,
                                                        events: parsed.claudeEvents,
                                                        rejections: parsed.claudeRejections,
@@ -59,6 +59,13 @@ actor LogReaders {
                                                        ledger: ledger))
         }
         if parsed.codexAvailable && !parsed.codexEvents.isEmpty {
+            let stored = UsageLedger.load(for: .codex)
+            let ledger = UsageLedger.updated(stored,
+                                             events: parsed.codexEvents,
+                                             history: [:],
+                                             now: Date(),
+                                             retentionDays: Int(LogScanner.retention / 86400))
+            if ledger != stored { ledger.save(for: .codex) }
             var config = quota[.codex] ?? .init()
             if config.rateLimits == nil { config.rateLimits = parsed.codexQuota }
             if config.planName == nil { config.planName = parsed.codexPlan }
@@ -66,7 +73,8 @@ actor LogReaders {
                                                        events: parsed.codexEvents,
                                                        rejections: [],
                                                        prices: prices,
-                                                       quota: config))
+                                                       quota: config,
+                                                       ledger: ledger))
         }
         return snapshots
     }

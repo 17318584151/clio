@@ -1,27 +1,26 @@
 import Foundation
 
-/// Claude Code's daily token totals, kept after the transcripts they were read
-/// from are gone.
+/// Daily token totals, kept after the session logs they were read from are gone.
 ///
-/// Claude Code deletes transcripts older than `cleanupPeriodDays` (30 by
-/// default). A day is taken from the scan while none of its transcripts can
-/// have been deleted, and keeps that total afterwards. A day never seen that
-/// way is filled once from the scan's leftovers, or else from Claude Code's
-/// stats cache, which counts a reply once for every line it was written as.
+/// A day is taken from the scan while its source logs are still expected to be
+/// available, and keeps that total afterwards.
 struct UsageLedger: Codable, Equatable {
     /// Keyed `yyyy-MM-dd` in the local calendar.
     var days: [String: Int]
 
-    private static var path: URL { AppPaths.support.appending(path: "daily-tokens.json") }
+    private static func path(for tool: Tool) -> URL {
+        let name = tool == .claudeCode ? "daily-tokens.json" : "codex-daily-tokens.json"
+        return AppPaths.support.appending(path: name)
+    }
 
-    static func load() -> UsageLedger? {
-        guard let data = try? Data(contentsOf: path) else { return nil }
+    static func load(for tool: Tool) -> UsageLedger? {
+        guard let data = try? Data(contentsOf: path(for: tool)) else { return nil }
         return try? JSONDecoder().decode(UsageLedger.self, from: data)
     }
 
-    func save() {
+    func save(for tool: Tool) {
         guard let data = try? JSONEncoder().encode(self) else { return }
-        try? data.write(to: Self.path, options: .atomic)
+        try? data.write(to: Self.path(for: tool), options: .atomic)
     }
 
     /// Claude Code's `cleanupPeriodDays`; nil when it is 0, which turns deletion off.

@@ -31,7 +31,7 @@ macOS 菜单栏里的 Claude Code / Codex 用量面板：额度还剩多少、�
 - **今日活跃**：相邻两次回复的间隔求和，每段最多计 5 分钟；副行是昨日同口径。
 - **今日请求**：今天的回复条数与去重后的会话数。
 - 两张卡片各带一条最近 14 天的折线。
-- **每日活跃**热力图，近 22 周，悬停显示某天的日期与用量。近期来自扫描转录文件，更早的部分读 Claude Code 自己的统计缓存补齐。
+- **每日活跃**热力图，近 22 周，悬停显示某天的日期与用量。用量来自本地会话日志，并保存在 Clio 的每日记录中。
 
 ### 菜单栏
 
@@ -154,7 +154,7 @@ Clio --snapshot <目录>   # 把每个界面渲染成 PNG
 
 ## 已知限制
 
-- Claude Code 的热力图与月环比读 Clio 自己保存的每日用量（`~/Library/Application Support/Clio/daily-tokens.json`）。Claude Code 默认删除 30 天前的转录文件（由 `cleanupPeriodDays` 控制），扫描到不了上月月初；转录文件还不可能被删除的日子按扫描结果记录，之后保留不变。
+- 热力图与月环比读取 Clio 保存的每日用量：Claude Code 使用 `~/Library/Application Support/Clio/daily-tokens.json`，Codex 使用 `~/Library/Application Support/Clio/codex-daily-tokens.json`。Claude Code 按 `cleanupPeriodDays` 保存仍在转录保留期内的扫描结果；Codex 按会话日志扫描器的 180 天范围保存扫描结果。已保存日期在对应日志不再可读后仍会保留。首次运行时，Clio 无法恢复已删除或未扫描到的日志数据。
 - 首次运行之前、以及 Clio 停用超过 `cleanupPeriodDays` 天期间的日子，只在第一次遇到时取一次值：有扫描残留用残留，否则用 Claude Code 的统计缓存 `~/.claude/stats-cache.json`。这两种数值都不准：残留只是当天一部分会话；统计缓存把同一次回复按写入的行数重复计入，约为扫描结果的 1.2–2.5 倍，且只在 Claude Code 需要时重算，未必覆盖最近几天。
 - 今日活跃是推算值：日志只记录每次回复的时间点，没有会话时长。
 - 「开机自启」需要正式签名，ad-hoc 构建下注册会失败，开关会自己弹回关闭。
