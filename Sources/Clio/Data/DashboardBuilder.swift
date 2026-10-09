@@ -56,7 +56,8 @@ enum DashboardBuilder {
         return ToolSnapshot(
             tool: tool,
             plan: quota.planName,
-            fiveHour: fiveHourWindow(sorted, rejections: rejections, live: live?.fiveHour, now: now),
+            fiveHour: tool == .claudeCode || live?.fiveHour != nil
+                ? fiveHourWindow(sorted, rejections: rejections, live: live?.fiveHour, now: now) : nil,
             week: weekWindow(sorted, live: live?.sevenDay, now: now, calendar: calendar),
             modelQuota: modelQuotaWindow(sorted, live: live, now: now, calendar: calendar),
             totals: totals,
@@ -109,8 +110,13 @@ enum DashboardBuilder {
 
     // MARK: - Aggregations
 
-    private static func cost(of events: [UsageEvent], prices: PriceTable) -> Double {
-        events.reduce(0) { $0 + (prices.cost($1.counts, model: $1.model) ?? 0) }
+    private static func cost(of events: [UsageEvent], prices: PriceTable) -> Double? {
+        var total = 0.0
+        for event in events {
+            guard let cost = prices.cost(event.counts, model: event.model) else { return nil }
+            total += cost
+        }
+        return total
     }
 
     private static func bucket(_ events: [UsageEvent],
@@ -149,13 +155,15 @@ enum DashboardBuilder {
         var spend: [String: Double] = [:]
         for event in events {
             tokens[event.model, default: 0] += event.counts.total
-            spend[event.model, default: 0] += prices.cost(event.counts, model: event.model) ?? 0
+            if let cost = prices.cost(event.counts, model: event.model) {
+                spend[event.model, default: 0] += cost
+            }
         }
         return tokens
             .map { ModelUsage(model: $0.key,
                               displayName: ModelNaming.displayName(for: $0.key),
                               tokens: $0.value,
-                              cost: spend[$0.key] ?? 0) }
+                              cost: spend[$0.key]) }
             .sorted { $0.tokens > $1.tokens }
     }
 

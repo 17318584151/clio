@@ -40,7 +40,9 @@ struct SubscriptionCard: View {
                 }
                 .frame(height: 19)
             }
-            QuotaRow(window: snapshot.fiveHour, onTip: { tip = $0 })
+            if let fiveHour = snapshot.fiveHour {
+                QuotaRow(window: fiveHour, onTip: { tip = $0 })
+            }
             QuotaRow(window: snapshot.week, onTip: { tip = $0 })
             if let modelQuota = snapshot.modelQuota {
                 QuotaRow(window: modelQuota, onTip: { tip = $0 })

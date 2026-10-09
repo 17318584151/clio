@@ -22,7 +22,7 @@ struct UsageCard: View {
 
     /// Of the input that could have been served from cache, the share that was.
     private var cacheHitRate: String {
-        let considered = counts.cacheRead + counts.input
+        let considered = counts.cacheRead + counts.input + counts.cacheWrite
         guard considered > 0 else { return "—" }
         return Format.percent(Double(counts.cacheRead) / Double(considered))
     }
@@ -71,6 +71,7 @@ struct UsageCard: View {
                         .monospacedDigit()
                         .foregroundStyle(theme.cost)
                         .lineLimit(1)
+                        .help(cost == nil ? "部分模型缺少价格，无法计算总花费" : "")
                 }
                 .fixedSize()
             }
@@ -289,7 +290,7 @@ private struct ModelBreakdown: View {
     ]
 
     private func weight(_ model: ModelUsage) -> Double {
-        basis == .tokens ? Double(model.tokens) : model.cost
+        basis == .tokens ? Double(model.tokens) : (model.cost ?? 0)
     }
 
     private var ordered: [ModelUsage] { models.sorted { weight($0) > weight($1) } }
@@ -322,7 +323,7 @@ private struct ModelBreakdown: View {
             GeometryReader { geo in
                 // Square-ended segments inside a rounded track: only the track's
                 // own ends are round, and the 2pt gaps show the track through.
-                let shown = ordered.prefix(5)
+                let shown = ordered.filter { basis == .tokens || $0.cost != nil }.prefix(5)
                 let usable = max(0, geo.size.width - 2 * CGFloat(max(0, shown.count - 1)))
                 ZStack(alignment: .leading) {
                     Capsule().fill(theme.shareTrack)
@@ -362,6 +363,7 @@ private struct ModelBreakdown: View {
                         .monospacedDigit()
                         .foregroundStyle(basis == .cost ? theme.textPrimary : theme.textSecondary)
                         .frame(width: 56, alignment: .trailing)
+                        .help(model.cost == nil ? "未找到此模型的价格" : "")
                 }
                 .frame(height: 17)
             }

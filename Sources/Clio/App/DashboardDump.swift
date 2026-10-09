@@ -35,7 +35,7 @@ enum DashboardDump {
         for snapshot in dashboard.snapshots {
             print("")
             print("── \(snapshot.tool.displayName) · \(snapshot.plan ?? "未知档位") ──")
-            describe(snapshot.fiveHour)
+            if let fiveHour = snapshot.fiveHour { describe(fiveHour) }
             describe(snapshot.week)
             if let modelQuota = snapshot.modelQuota { describe(modelQuota) }
             for granularity in Granularity.allCases {

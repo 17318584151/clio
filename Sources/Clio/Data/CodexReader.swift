@@ -1,17 +1,17 @@
 import Foundation
 
-/// Reads `~/.codex/sessions/**/*.jsonl`.
+/// Reads active and archived `.jsonl` sessions in `~/.codex`.
 ///
 /// Codex records a `token_count` event per turn; `last_token_usage` is that
 /// turn's delta while `total_token_usage` is the session running total, so only
-/// the delta is accumulated. `input_tokens` there already includes the cached
-/// portion reported separately as `cached_input_tokens`.
+/// the delta is accumulated. `input_tokens` includes both `cached_input_tokens`
+/// and `cache_write_input_tokens`.
 ///
 /// A `token_count` line also carries `rate_limits`: `used_percent` and
 /// `resets_at` for each window. A window of a day or longer is the weekly
 /// allowance (10080 minutes). Shorter ones, when Codex sends them, are the
-/// 5-hour allowance. The newest reading wins; a line with no windows does not
-/// erase it. Nothing is asked of the network.
+/// 5-hour allowance. The newest reading with windows replaces the previous
+/// snapshot. Nothing is asked of the network.
 ///
 /// Each rollout file is one thread. `session_meta.session_id` is the
 /// conversation it belongs to, and subagent threads repeat their parent's id,
@@ -27,7 +27,7 @@ final class CodexReader {
         var plan: String?
     }
 
-    private let scanner = LogScanner(root: Tool.codex.logDirectory)
+    private let scanners: [LogScanner]
     private var events: [String: UsageEvent] = [:]
     /// Latest model named in each session file. Subagent sessions log a
     /// different model alongside their parent, so it is not shared across files.
@@ -40,7 +40,12 @@ final class CodexReader {
     private var quota: RateLimitSnapshot?
     private var planName: String?
 
-    var isAvailable: Bool { scanner.rootExists }
+    init(root: URL = Tool.codex.logDirectory) {
+        scanners = [LogScanner(root: root),
+                    LogScanner(root: root.deletingLastPathComponent().appending(path: "archived_sessions"))]
+    }
+
+    var isAvailable: Bool { scanners.contains { $0.rootExists } }
 
     /// `token_count` lines carry usage but no model; the model is named by the
     /// `turn_context` line that opens each turn. `session_meta` is the first
@@ -50,15 +55,17 @@ final class CodexReader {
     private static let sessionMarker = Array("session_meta".utf8)
 
     func refresh(now: Date = Date()) -> Reading {
-        scanner.scan { file, line in
-            guard ByteSearch.contains(line, Self.usageMarker)
-                    || ByteSearch.contains(line, Self.contextMarker)
-                    || ByteSearch.contains(line, Self.sessionMarker) else { return }
-            guard let base = line.baseAddress else { return }
-            let data = Data(bytes: base, count: line.count)
-            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { return }
-            ingest(object, file: file)
+        for scanner in scanners {
+            scanner.scan { file, line in
+                guard ByteSearch.contains(line, Self.usageMarker)
+                        || ByteSearch.contains(line, Self.contextMarker)
+                        || ByteSearch.contains(line, Self.sessionMarker) else { return }
+                guard let base = line.baseAddress else { return }
+                let data = Data(bytes: base, count: line.count)
+                guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { return }
+                ingest(object, file: file)
+            }
         }
         let cutoff = now.addingTimeInterval(-LogScanner.retention)
         events = events.filter { $0.value.timestamp > cutoff }
@@ -106,13 +113,15 @@ final class CodexReader {
 
         let input = last["input_tokens"] as? Int ?? 0
         let cached = last["cached_input_tokens"] as? Int ?? 0
+        let written = last["cache_write_input_tokens"] as? Int ?? 0
         var counts = TokenCounts()
-        counts.input = max(0, input - cached)
+        counts.input = max(0, input - cached - written)
         counts.cacheRead = cached
+        counts.cacheWrite5m = written
         counts.output = last["output_tokens"] as? Int ?? 0
 
         guard counts.total > 0 else { return }
-        let key = "\(stamp)|\(currentModel)|\(counts.input)|\(counts.output)|\(counts.cacheRead)"
+        let key = "\(stamp)|\(currentModel)|\(counts.input)|\(counts.output)|\(counts.cacheRead)|\(counts.cacheWrite)"
         guard events[key] == nil else { return }
         events[key] = UsageEvent(timestamp: timestamp,
                                  model: currentModel,
@@ -141,11 +150,7 @@ final class CodexReader {
                 fiveHour = window
             }
         }
-        // A payload that only carries one window must not wipe the other.
-        // Codex sends the 7-day window alone and leaves the 5-hour one empty.
         guard fiveHour != nil || week != nil else { return }
-        if fiveHour == nil { fiveHour = quota?.fiveHour }
-        if week == nil { week = quota?.sevenDay }
         quota = RateLimitSnapshot(updatedAt: timestamp,
                                   fiveHour: fiveHour,
                                   sevenDay: week,

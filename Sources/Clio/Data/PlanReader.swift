@@ -36,6 +36,7 @@ enum PlanReader {
         case "max_5x": return "Max 5×"
         case "max_20x": return "Max 20×"
         case "pro": return "Pro"
+        case "prolite": return "Pro 5×"
         case "free": return "Free"
         case "team": return "Team"
         case "enterprise": return "Enterprise"

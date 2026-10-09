@@ -23,8 +23,10 @@ macOS 菜单栏里的 Claude Code / Codex 用量面板：额度还剩多少、�
 
 - 日 / 周 / 月三个粒度，各自的 Token 总量、环比、花费估算。
 - 输入、输出、缓存读、缓存写，以及缓存命中率。
+- Codex 的输入总量包含缓存读和缓存写，三项分别显示且不重复计入总量；缓存写取日志中的 `cache_write_input_tokens`，字段缺失时记为 0。
 - 柱状图按小时（日）、按星期（周）、按日期（月）分布，悬停显示该柱的具体数值。
 - 按模型的占比条与逐行明细，含各自的 Token 与花费。
+- 花费按公开 API 单价估算。模型价格缺失时，模型花费与包含该模型的总花费估算显示「—」；Token 数仍正常统计。通过 ChatGPT 账号使用的自动审查免费且不计入套餐额度，见 [OpenAI 官方说明](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)。
 
 ### 活跃度
 
@@ -82,11 +84,11 @@ Claude Code 应答前会把取到的额度连同获取时间写进 `~/.claude.js
 
 原命令原样保留在后面，状态栏照常渲染。此后 Claude Code 每渲染一次状态栏就推送一次额度，用它时几乎实时。改写前会备份成 `settings.json.bak-clio-<时间戳>`，按「移除」可还原。这条通道不含按模型窗口。
 
-**Codex 周额度**（默认，无需配置）。Codex 把额度写在 `~/.codex/sessions` 的 `token_count` 事件里，字段是 `rate_limits`。`window_minutes` 为 10080（7 天）的窗口用 `used_percent` 和 `resets_at` 显示在「本周」；这是上一轮请求附带的快照，没有新的请求就不会更新。日志里目前没有 5 小时窗口，那一行仍显示窗口内的 Token 数。
+**Codex 额度**（默认，无需配置）。Codex 把额度写在会话日志的 `token_count` 事件里，字段是 `rate_limits`。`window_minutes` 为 10080（7 天）的窗口用 `used_percent` 和 `resets_at` 显示在「本周」；这是上一轮请求附带的快照，没有新的请求就不会更新。订阅记录未提供 5 小时窗口时，面板隐藏该行。套餐标识 `prolite` 显示为「Pro 5×」。额度百分比与本地 Token 累计分别统计。
 
 ## 数据与隐私
 
-- 只读本地日志：`~/.claude/projects/**/*.jsonl` 与 `~/.codex/sessions`，从不写入。
+- 只读本地日志：`~/.claude/projects/**/*.jsonl`、`~/.codex/sessions` 与 `~/.codex/archived_sessions`，从不写入。Codex 会话归档后仍计入用量，活动日志与归档日志中重复的记录只计一次。
 - 应用自身发出的网络请求有两类：向 models.dev 取价格表；向 GitHub 查询与下载新版本。额度请求是 Claude Code 自己发的。
 - 用量数据不离开本机。
 
@@ -141,6 +143,7 @@ Scripts/package.sh
 ```bash
 Scripts/build.sh      # 出 build/Clio.app
 Scripts/package.sh    # 出 build/Clio-<版本>.dmg
+bash Scripts/test-usage.sh # 用量解析与聚合回归验证
 ```
 
 编译走 `swiftc` 直接调用而不是 `swift build`：只装了 Command Line Tools 的机器上，SwiftPM 的清单编译会失败。`Package.swift` 保留给装有完整 Xcode 的机器。

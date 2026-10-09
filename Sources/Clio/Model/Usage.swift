@@ -115,7 +115,7 @@ struct ModelUsage: Identifiable {
     let model: String
     let displayName: String
     let tokens: Int
-    let cost: Double
+    let cost: Double?
 
     var id: String { model }
 }
@@ -155,7 +155,7 @@ struct QuotaWindow {
 struct ToolSnapshot {
     let tool: Tool
     let plan: String?
-    let fiveHour: QuotaWindow
+    let fiveHour: QuotaWindow?
     let week: QuotaWindow
     /// A per-model allowance shown beneath the two windows, when configured.
     let modelQuota: QuotaWindow?
