@@ -18,16 +18,18 @@ enum UsageTests {
         testQuotaVisibility()
         testUnknownPrices()
         testZeroPrice()
-        testToolMilestones()
-        testNewToolMilestones()
+        testAutoReviewPrice()
+        testCombinedUsage()
+        testCombinedActivity()
+        testCombinedMilestones()
         try testMilestonePersistence()
         testMilestonePeriods()
-        testLegacyMilestones()
+        testPerToolMilestones()
         guard failures == 0 else {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("14 usage regression scenarios passed")
+        print("16 usage regression scenarios passed")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -97,10 +99,10 @@ enum UsageTests {
         let result = DashboardBuilder.snapshot(tool: .codex, events: events, rejections: [], prices: prices,
                                               quota: .init(), ledger: ledger, now: now)
         for period in Granularity.allCases {
-            expect(result.totals[period]?.total == 2200, "\(period) total must include archived usage")
-            expect(result.buckets[period]?.reduce(0, { $0 + $1.tokens }) == 2200, "\(period) chart must include archived usage")
+            expect(result.usage.totals[period]?.total == 2200, "\(period) total must include archived usage")
+            expect(result.usage.buckets[period]?.reduce(0, { $0 + $1.tokens }) == 2200, "\(period) chart must include archived usage")
         }
-        expect(result.dailyTokens.values.reduce(0, +) == 2200, "daily ledger must include archived usage")
+        expect(result.usage.dailyTokens.values.reduce(0, +) == 2200, "daily ledger must include archived usage")
     }
 
     private static func testArchiveMove() throws {
@@ -146,7 +148,7 @@ enum UsageTests {
         expect(counts.input == 200 && counts.cacheRead == 600 && counts.cacheWrite == 200,
                "input must separate cache reads and writes")
         expect(counts.output == 100 && counts.total == 1100, "cache writes and reasoning must not double the total")
-        expect(snapshot(result.events).totals[.day]?.cacheWrite == 200,
+        expect(snapshot(result.events).usage.totals[.day]?.cacheWrite == 200,
                "reported cache writes must reach the dashboard")
         expect(abs((prices.cost(counts, model: "gpt-priced") ?? 0) - 0.00202) < 1e-12,
                "cache writes must use their price")
@@ -175,7 +177,7 @@ enum UsageTests {
         let events = ["gpt-priced", "codex-auto-review"].map {
             UsageEvent(timestamp: now, model: $0, counts: counts, dedupeKey: $0)
         }
-        let result = snapshot(events)
+        let result = snapshot(events).usage
         let unknown: Double? = result.models[.day]?.first { $0.model == "codex-auto-review" }?.cost
         expect(unknown == nil, "missing model prices must remain unknown")
         expect(result.costs[.day] == nil, "an incomplete total cost must remain unknown")
@@ -187,42 +189,90 @@ enum UsageTests {
     private static func testZeroPrice() {
         let free = PriceTable(prices: ["free-model": .make(input: 0, output: 0, cacheRead: 0, cacheWrite: 0)])
         let event = UsageEvent(timestamp: now, model: "free-model", counts: .init(input: 1000), dedupeKey: "free")
-        let result = snapshot([event], prices: free)
+        let result = snapshot([event], prices: free).usage
         expect(result.costs[.day] == 0 && result.models[.day]?.first?.cost == 0,
                "a known zero price must remain zero")
     }
 
-    private static func milestoneState(claude: Int? = nil, codex: Int? = nil, at date: Date? = nil) -> MilestoneState {
-        let snapshots = [(Tool.claudeCode, claude), (.codex, codex)].compactMap { tool, tokens -> ToolSnapshot? in
-            guard let tokens else { return nil }
-            let event = UsageEvent(timestamp: now, model: "gpt-priced", counts: .init(input: tokens), dedupeKey: tool.rawValue)
-            return snapshot([event], tool: tool)
+    private static func testAutoReviewPrice() {
+        let counts = TokenCounts(input: 1000, output: 100, cacheRead: 600)
+        expect(PriceTable.builtin.cost(counts, model: "codex-auto-review") == 0,
+               "Codex automatic review must be priced at zero")
+    }
+
+    private static func event(_ tool: Tool, _ seconds: TimeInterval, tokens: Int, model: String = "gpt-priced") -> UsageEvent {
+        UsageEvent(timestamp: now.addingTimeInterval(seconds), model: model, counts: .init(input: tokens),
+                   dedupeKey: "\(tool.rawValue)\(seconds)", sessionID: tool.rawValue)
+    }
+
+    /// Calendar-day periods, so the fixtures land inside today wherever the test runs.
+    private static var noon: Date { Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: now)! }
+
+    private static func testCombinedUsage() {
+        let shift = noon.timeIntervalSince(now)
+        let claudeEvents = [event(.claudeCode, shift, tokens: 3000, model: "claude-opus-5-5"),
+                            event(.claudeCode, shift - 86400, tokens: 1000, model: "claude-opus-5-5")]
+        let codexEvents = [event(.codex, shift + 60, tokens: 1000), event(.codex, shift + 120, tokens: 500, model: "unpriced")]
+        let prices = PriceTable(prices: ["gpt-priced": .make(input: 2, output: 10),
+                                         "claude-opus-5-5": .make(input: 4, output: 20)])
+        let claude = DashboardBuilder.snapshot(tool: .claudeCode, events: claudeEvents, rejections: [], prices: prices,
+                                               quota: .init(), now: noon).usage
+        let codex = DashboardBuilder.snapshot(tool: .codex, events: codexEvents, rejections: [], prices: prices,
+                                              quota: .init(), now: noon).usage
+        let combined = DashboardBuilder.combined([claude, codex], events: claudeEvents + codexEvents, now: noon)
+
+        expect(combined.totals[.day]?.total == 4500, "combined day total must add both tools")
+        expect(combined.totals[.day]?.input == 4500, "combined token kinds must add both tools")
+        expect(combined.previousTotals[.day] == 1000, "combined previous day must add both tools")
+        expect(abs(combined.tokenTrend(.day) - 3.5) < 1e-9, "combined trend must compare combined totals")
+        expect(combined.costs[.day] == nil, "an unpriced model in either tool must leave the combined cost unknown")
+        let hour = Calendar.current.component(.hour, from: noon)
+        let bar = combined.buckets[.day]?[hour]
+        expect(bar?.byTool[.claudeCode] == 3000 && bar?.byTool[.codex] == 1500 && bar?.tokens == 4500,
+               "a combined bar must keep each tool's share")
+        expect(combined.buckets[.day]?.count == 24, "combined day chart must keep one bar per hour")
+        expect(combined.models[.day]?.map(\.model) == ["claude-opus-5-5", "gpt-priced", "unpriced"],
+               "combined models must be listed together by tokens")
+        let today = Calendar.current.startOfDay(for: noon)
+        expect(combined.dailyTokens[today] == 4500, "combined heat map must add both tools per day")
+
+        let priced = DashboardBuilder.combined([claude], events: claudeEvents, now: noon)
+        expect(priced.costs[.day] == claude.costs[.day], "a single tool's combined cost must equal its own")
+    }
+
+    private static func testCombinedActivity() {
+        let shift = noon.timeIntervalSince(now)
+        // Both tools answer through the same minutes, then Codex carries on alone.
+        let claudeEvents = (0...4).map { event(.claudeCode, shift + Double($0) * 60, tokens: 10) }
+        let codexEvents = (0...8).map { event(.codex, shift + Double($0) * 60 + 30, tokens: 10) }
+        let activity = DashboardBuilder.combined([], events: claudeEvents + codexEvents, now: noon).activity
+        expect(abs(activity.activeHours - (8 * 60 + 30) / 3600.0) < 1e-9,
+               "time spent in both tools at once must count once")
+        expect(activity.requests == 14, "combined requests must add both tools")
+        expect(activity.sessions == 2, "combined sessions must add both tools")
+    }
+
+    private static func milestoneState(claude: Int = 0, codex: Int = 0, at date: Date? = nil) -> MilestoneState {
+        let parts = [(Tool.claudeCode, claude), (.codex, codex)].map { tool, tokens in
+            snapshot([UsageEvent(timestamp: now, model: "gpt-priced", counts: .init(input: tokens), dedupeKey: tool.rawValue)],
+                     tool: tool).usage
         }
-        return Milestones.state(snapshots: snapshots, at: date ?? now)
+        let totals = DashboardBuilder.combined(parts, events: [], now: now).totals
+        return Milestones.state(dayTokens: totals[.day]?.total ?? 0,
+                                weekTokens: totals[.week]?.total ?? 0,
+                                monthTokens: totals[.month]?.total ?? 0,
+                                at: date ?? now)
     }
 
-    private static func testToolMilestones() {
+    private static func testCombinedMilestones() {
         let initial = milestoneState(claude: 60_000_000, codex: 30_000_000)
+        expect(!Milestones.shouldCelebrate(previous: nil, current: initial), "first scan must establish a baseline")
         let combined100 = milestoneState(claude: 60_000_000, codex: 40_000_000)
-        expect(!Milestones.shouldCelebrate(previous: initial, current: combined100),
-               "Claude Code 60M and Codex 40M must not trigger a combined milestone")
-        let claude100 = milestoneState(claude: 100_000_000, codex: 40_000_000)
-        expect(Milestones.shouldCelebrate(previous: combined100, current: claude100),
-               "Claude Code must celebrate its own 100M crossing")
-        let both100 = milestoneState(claude: 100_000_000, codex: 100_000_000)
-        expect(Milestones.shouldCelebrate(previous: claude100, current: both100),
-               "Codex must celebrate its own 100M crossing after Claude Code")
-    }
-
-    private static func testNewToolMilestones() {
-        let claude = milestoneState(claude: 100_000_000)
-        expect(!Milestones.shouldCelebrate(previous: nil, current: claude), "first scan must establish a baseline")
-        let addedCodex = milestoneState(claude: 100_000_000, codex: 200_000_000)
-        expect(!Milestones.shouldCelebrate(previous: claude, current: addedCodex),
-               "a newly detected tool must establish its own baseline")
-        expect(Milestones.shouldCelebrate(previous: addedCodex,
-                                          current: milestoneState(claude: 100_000_000, codex: 300_000_000)),
-               "a new tool must celebrate subsequent crossings")
+        expect(Milestones.shouldCelebrate(previous: initial, current: combined100),
+               "Claude Code 60M and Codex 40M must celebrate the combined 100M")
+        let still100 = milestoneState(claude: 100_000_000, codex: 40_000_000)
+        expect(!Milestones.shouldCelebrate(previous: combined100, current: still100),
+               "a tool reaching 100M on its own must not celebrate a combined floor already reached")
     }
 
     private static func testMilestonePersistence() throws {
@@ -232,7 +282,7 @@ enum UsageTests {
                "a restart must not replay completed milestones")
         let partial = Milestones.merged(previous: restored, current: milestoneState(claude: 100_000_000))
         expect(!Milestones.shouldCelebrate(previous: partial, current: original),
-               "partial reads must retain each tool's completed milestones")
+               "partial reads must retain completed milestones")
     }
 
     private static func testMilestonePeriods() {
@@ -240,12 +290,12 @@ enum UsageTests {
         for period in Granularity.allCases {
             var current = previous
             switch period {
-            case .day: current.tools[Tool.codex.rawValue]?.dayFloor += 1
-            case .week: current.tools[Tool.codex.rawValue]?.weekFloor += 1
-            case .month: current.tools[Tool.codex.rawValue]?.monthFloor += 1
+            case .day: current.dayFloor += 1
+            case .week: current.weekFloor += 1
+            case .month: current.monthFloor += 1
             }
             expect(Milestones.shouldCelebrate(previous: previous, current: current),
-                   "each tool's \(period) crossing must trigger a celebration")
+                   "a \(period) crossing must trigger a celebration")
         }
         let nextYear = Calendar.current.date(byAdding: .year, value: 1, to: now)!
         let reset = milestoneState(claude: 200_000_000, codex: 200_000_000, at: nextYear)
@@ -255,12 +305,12 @@ enum UsageTests {
                "completed floors must reset with their calendar periods")
     }
 
-    private static func testLegacyMilestones() {
-        let legacy = Data(#"{"dayID":"2026-10-09","dayFloor":1,"weekID":"2026-W41","weekFloor":2,"monthID":"2026-10","monthFloor":3}"#.utf8)
-        let restored = try? JSONDecoder().decode(MilestoneState.self, from: legacy)
-        expect(restored == nil, "legacy combined milestones must establish per-tool baselines")
+    private static func testPerToolMilestones() {
+        let perTool = Data(#"{"tools":{"claudeCode":{"dayID":"2026-10-09","dayFloor":1,"weekID":"2026-W41","weekFloor":2,"monthID":"2026-10","monthFloor":3}}}"#.utf8)
+        let restored = try? JSONDecoder().decode(MilestoneState.self, from: perTool)
+        expect(restored == nil, "per-tool milestones must give way to a combined baseline")
         expect(!Milestones.shouldCelebrate(previous: restored,
                                            current: milestoneState(claude: 200_000_000, codex: 100_000_000)),
-               "migration from combined milestones must not celebrate existing usage")
+               "migration from per-tool milestones must not celebrate existing usage")
     }
 }

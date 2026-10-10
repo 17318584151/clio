@@ -25,34 +25,6 @@ enum DashboardBuilder {
         let sorted = events.sorted { $0.timestamp < $1.timestamp }
         let live = quota.rateLimits
 
-        var totals: [Granularity: TokenCounts] = [:]
-        var costs: [Granularity: Double] = [:]
-        var tokenTrend: [Granularity: Double] = [:]
-        var buckets: [Granularity: [Bucket]] = [:]
-        var models: [Granularity: [ModelUsage]] = [:]
-
-        for granularity in Granularity.allCases {
-            let current = range(for: granularity, containing: now, calendar: calendar)
-            let previous = previousRange(current, granularity: granularity, calendar: calendar)
-            let inCurrent = sorted.filter { current.contains($0.timestamp) }
-            let inPrevious = sorted.filter { previous.contains($0.timestamp) }
-
-            let currentCounts = inCurrent.reduce(into: TokenCounts()) { $0 += $1.counts }
-            let previousCounts = inPrevious.reduce(into: TokenCounts()) { $0 += $1.counts }
-            totals[granularity] = currentCounts
-
-            costs[granularity] = cost(of: inCurrent, prices: prices)
-            if granularity == .month, let ledger {
-                // The previous month's transcripts are partly deleted by now.
-                tokenTrend[granularity] = change(from: ledger.tokens(in: previous, calendar: calendar),
-                                                 to: currentCounts.total)
-            } else {
-                tokenTrend[granularity] = change(from: previousCounts.total, to: currentCounts.total)
-            }
-            buckets[granularity] = bucket(inCurrent, granularity: granularity, range: current, calendar: calendar)
-            models[granularity] = breakdown(inCurrent, prices: prices)
-        }
-
         return ToolSnapshot(
             tool: tool,
             plan: quota.planName,
@@ -60,15 +32,102 @@ enum DashboardBuilder {
                 ? fiveHourWindow(sorted, rejections: rejections, live: live?.fiveHour, now: now) : nil,
             week: weekWindow(sorted, live: live?.sevenDay, now: now, calendar: calendar),
             modelQuota: modelQuotaWindow(sorted, live: live, now: now, calendar: calendar),
-            totals: totals,
-            costs: costs,
-            tokenTrend: tokenTrend,
-            buckets: buckets,
-            models: models,
-            dailyTokens: dailyTokens(sorted, ledger: ledger, now: now, calendar: calendar),
-            activity: activity(sorted, now: now, calendar: calendar),
+            usage: usage(tool: tool, sorted, prices: prices, ledger: ledger, now: now, calendar: calendar),
             updatedAt: now
         )
+    }
+
+    private static func usage(tool: Tool,
+                              _ sorted: [UsageEvent],
+                              prices: PriceTable,
+                              ledger: UsageLedger?,
+                              now: Date,
+                              calendar: Calendar) -> UsageSummary {
+        var totals: [Granularity: TokenCounts] = [:]
+        var previousTotals: [Granularity: Int] = [:]
+        var costs: [Granularity: Double] = [:]
+        var buckets: [Granularity: [Bucket]] = [:]
+        var models: [Granularity: [ModelUsage]] = [:]
+
+        for granularity in Granularity.allCases {
+            let current = range(for: granularity, containing: now, calendar: calendar)
+            let previous = previousRange(current, granularity: granularity, calendar: calendar)
+            let inCurrent = sorted.filter { current.contains($0.timestamp) }
+
+            totals[granularity] = inCurrent.reduce(into: TokenCounts()) { $0 += $1.counts }
+            costs[granularity] = cost(of: inCurrent, prices: prices)
+            if granularity == .month, let ledger {
+                // The previous month's transcripts are partly deleted by now.
+                previousTotals[granularity] = ledger.tokens(in: previous, calendar: calendar)
+            } else {
+                previousTotals[granularity] = sorted
+                    .filter { previous.contains($0.timestamp) }
+                    .reduce(0) { $0 + $1.counts.total }
+            }
+            buckets[granularity] = bucket(inCurrent, tool: tool, granularity: granularity, range: current,
+                                          calendar: calendar)
+            models[granularity] = breakdown(inCurrent, prices: prices)
+        }
+
+        return UsageSummary(totals: totals,
+                            previousTotals: previousTotals,
+                            costs: costs,
+                            buckets: buckets,
+                            models: models,
+                            dailyTokens: dailyTokens(sorted, ledger: ledger, now: now, calendar: calendar),
+                            activity: activity(sorted, now: now, calendar: calendar))
+    }
+
+    /// The tools' usage added together. Active time is worked out again from
+    /// every tool's responses, so time spent in two tools at once counts once.
+    static func combined(_ parts: [UsageSummary],
+                         events: [UsageEvent],
+                         now: Date = Date(),
+                         calendar: Calendar = .current) -> UsageSummary {
+        var totals: [Granularity: TokenCounts] = [:]
+        var previousTotals: [Granularity: Int] = [:]
+        var costs: [Granularity: Double] = [:]
+        var buckets: [Granularity: [Bucket]] = [:]
+        var models: [Granularity: [ModelUsage]] = [:]
+
+        for granularity in Granularity.allCases {
+            totals[granularity] = parts.reduce(into: TokenCounts()) { $0 += $1.totals[granularity] ?? TokenCounts() }
+            previousTotals[granularity] = parts.reduce(0) { $0 + ($1.previousTotals[granularity] ?? 0) }
+            costs[granularity] = parts.reduce(Optional(0.0)) { sum, part in
+                sum.flatMap { total in part.costs[granularity].map { total + $0 } }
+            }
+
+            // Every tool's chart covers the same period, so bars line up by position.
+            let charts = parts.compactMap { $0.buckets[granularity] }
+            buckets[granularity] = charts.first.map { first in
+                first.indices.map { index in
+                    Bucket(id: first[index].id,
+                           label: first[index].label,
+                           byTool: charts.reduce(into: [:]) { $0.merge($1[index].byTool, uniquingKeysWith: +) })
+                }
+            }
+
+            var merged: [String: ModelUsage] = [:]
+            for model in parts.flatMap({ $0.models[granularity] ?? [] }) {
+                guard let existing = merged[model.model] else {
+                    merged[model.model] = model
+                    continue
+                }
+                merged[model.model] = ModelUsage(model: model.model,
+                                                 displayName: model.displayName,
+                                                 tokens: existing.tokens + model.tokens,
+                                                 cost: existing.cost.flatMap { cost in model.cost.map { cost + $0 } })
+            }
+            models[granularity] = merged.values.sorted { $0.tokens > $1.tokens }
+        }
+
+        return UsageSummary(totals: totals,
+                            previousTotals: previousTotals,
+                            costs: costs,
+                            buckets: buckets,
+                            models: models,
+                            dailyTokens: parts.reduce(into: [:]) { $0.merge($1.dailyTokens, uniquingKeysWith: +) },
+                            activity: activity(events, now: now, calendar: calendar))
     }
 
     // MARK: - Periods
@@ -99,15 +158,6 @@ enum DashboardBuilder {
         return start..<end
     }
 
-    private static func change(from old: Int, to new: Int) -> Double {
-        change(from: Double(old), to: Double(new))
-    }
-
-    private static func change(from old: Double, to new: Double) -> Double {
-        guard old > 0 else { return 0 }
-        return (new - old) / old
-    }
-
     // MARK: - Aggregations
 
     private static func cost(of events: [UsageEvent], prices: PriceTable) -> Double? {
@@ -120,6 +170,7 @@ enum DashboardBuilder {
     }
 
     private static func bucket(_ events: [UsageEvent],
+                               tool: Tool,
                                granularity: Granularity,
                                range: Range<Date>,
                                calendar: Calendar) -> [Bucket] {
@@ -131,7 +182,7 @@ enum DashboardBuilder {
                 totals[hour] += event.counts.total
             }
             return totals.enumerated().map {
-                Bucket(id: $0.offset, label: String(format: "%02d", $0.offset), tokens: $0.element)
+                Bucket(id: $0.offset, label: String(format: "%02d", $0.offset), byTool: [tool: $0.element])
             }
         case .week, .month:
             let days = calendar.dateComponents([.day], from: range.lowerBound, to: range.upperBound).day ?? 7
@@ -145,7 +196,7 @@ enum DashboardBuilder {
                 let label = granularity == .week
                     ? Self.weekdayNames[(calendar.component(.weekday, from: date) + 5) % 7]
                     : String(calendar.component(.day, from: date))
-                return Bucket(id: offset, label: label, tokens: tokens)
+                return Bucket(id: offset, label: label, byTool: [tool: tokens])
             }
         }
     }

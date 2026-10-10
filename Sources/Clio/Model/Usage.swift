@@ -94,7 +94,9 @@ struct QuotaRejection {
 struct Bucket: Identifiable {
     let id: Int
     let label: String
-    let tokens: Int
+    let byTool: [Tool: Int]
+
+    var tokens: Int { byTool.values.reduce(0, +) }
 }
 
 enum Granularity: String, CaseIterable, Identifiable {
@@ -151,6 +153,29 @@ struct QuotaWindow {
     }
 }
 
+/// Token usage over the three periods, for one tool or for all of them together.
+struct UsageSummary {
+    let totals: [Granularity: TokenCounts]
+    /// Tokens in the preceding period of the same length.
+    let previousTotals: [Granularity: Int]
+    /// Absent for a period with any unpriced model.
+    let costs: [Granularity: Double]
+    let buckets: [Granularity: [Bucket]]
+    let models: [Granularity: [ModelUsage]]
+    let dailyTokens: [Date: Int]
+    let activity: ActivitySummary
+
+    /// Change against the preceding period of the same length.
+    func tokenTrend(_ granularity: Granularity) -> Double {
+        let old = Double(previousTotals[granularity] ?? 0)
+        guard old > 0 else { return 0 }
+        return (Double(totals[granularity]?.total ?? 0) - old) / old
+    }
+
+    static let empty = UsageSummary(totals: [:], previousTotals: [:], costs: [:], buckets: [:],
+                                    models: [:], dailyTokens: [:], activity: .empty)
+}
+
 /// Everything one tool's screen needs.
 struct ToolSnapshot {
     let tool: Tool
@@ -159,19 +184,14 @@ struct ToolSnapshot {
     let week: QuotaWindow
     /// A per-model allowance shown beneath the two windows, when configured.
     let modelQuota: QuotaWindow?
-    let totals: [Granularity: TokenCounts]
-    let costs: [Granularity: Double]
-    /// Change against the preceding period of the same length.
-    let tokenTrend: [Granularity: Double]
-    let buckets: [Granularity: [Bucket]]
-    let models: [Granularity: [ModelUsage]]
-    let dailyTokens: [Date: Int]
-    let activity: ActivitySummary
+    let usage: UsageSummary
     let updatedAt: Date
 }
 
 struct Dashboard {
     let snapshots: [ToolSnapshot]
+    /// Every tool's usage added together.
+    let combined: UsageSummary
     let updatedAt: Date
 
     var isEmpty: Bool { snapshots.isEmpty }

@@ -14,6 +14,8 @@ struct IconMenu: View {
         let title: String
         let shortcut: String
         var isOn = false
+        /// Opened from the item in place of running its action.
+        var submenu: [Item] = []
         let action: () -> Void
     }
 
@@ -76,6 +78,8 @@ private struct MenuTrigger: NSViewRepresentable {
     final class Coordinator: NSObject {
         var items: [IconMenu.Item]
         var action: (() -> Void)?
+        /// The open menu's actions, indexed by each entry's tag.
+        private var actions: [() -> Void] = []
 
         init(items: [IconMenu.Item]) {
             self.items = items
@@ -89,20 +93,8 @@ private struct MenuTrigger: NSViewRepresentable {
                 return
             }
             let menu = NSMenu()
-            for (index, item) in items.enumerated() {
-                if item.title.isEmpty {
-                    menu.addItem(.separator())
-                    continue
-                }
-                let entry = NSMenuItem(title: item.title,
-                                       action: #selector(fire(_:)),
-                                       keyEquivalent: item.shortcut)
-                entry.keyEquivalentModifierMask = item.shortcut.isEmpty ? [] : [.command]
-                entry.target = self
-                entry.tag = index
-                entry.state = item.isOn ? .on : .off
-                menu.addItem(entry)
-            }
+            actions = []
+            add(items, to: menu)
             menu.popUp(positioning: nil,
                        at: NSPoint(x: 0, y: sender.bounds.height + 4),
                        in: sender)
@@ -111,9 +103,33 @@ private struct MenuTrigger: NSViewRepresentable {
             button?.syncHover()
         }
 
+        private func add(_ items: [IconMenu.Item], to menu: NSMenu) {
+            for item in items {
+                if item.title.isEmpty {
+                    menu.addItem(.separator())
+                    continue
+                }
+                let entry = NSMenuItem(title: item.title,
+                                       action: item.submenu.isEmpty ? #selector(fire(_:)) : nil,
+                                       keyEquivalent: item.shortcut)
+                entry.keyEquivalentModifierMask = item.shortcut.isEmpty ? [] : [.command]
+                entry.target = self
+                entry.state = item.isOn ? .on : .off
+                if item.submenu.isEmpty {
+                    entry.tag = actions.count
+                    actions.append(item.action)
+                } else {
+                    let submenu = NSMenu()
+                    add(item.submenu, to: submenu)
+                    entry.submenu = submenu
+                }
+                menu.addItem(entry)
+            }
+        }
+
         @objc private func fire(_ sender: NSMenuItem) {
-            guard items.indices.contains(sender.tag) else { return }
-            items[sender.tag].action()
+            guard actions.indices.contains(sender.tag) else { return }
+            actions[sender.tag]()
         }
     }
 }

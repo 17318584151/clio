@@ -39,16 +39,27 @@ enum DashboardDump {
             describe(snapshot.week)
             if let modelQuota = snapshot.modelQuota { describe(modelQuota) }
             for granularity in Granularity.allCases {
-                describe(snapshot, granularity)
+                describe(snapshot.usage, granularity)
             }
             print("今日按模型:")
-            for model in snapshot.models[.day] ?? [] {
+            for model in snapshot.usage.models[.day] ?? [] {
                 let name = model.displayName.padding(toLength: 14, withPad: " ", startingAt: 0)
                 print("  \(name) \(Format.compact(model.tokens))  \(Format.money(model.cost))  [\(model.model)]")
             }
-            let active = snapshot.dailyTokens.values.filter { $0 > 0 }.count
+            let active = snapshot.usage.dailyTokens.values.filter { $0 > 0 }.count
             print("热力图: 近 22 周内 \(active) 天有记录")
         }
+        guard dashboard.snapshots.count > 1 else { return }
+        let combined = dashboard.combined
+        print("")
+        print("── 合计 ──")
+        for granularity in Granularity.allCases {
+            describe(combined, granularity)
+        }
+        let activity = combined.activity
+        print(String(format: "今日活跃 %.1f 小时  请求 %d  会话 %d", activity.activeHours, activity.requests, activity.sessions))
+        let active = combined.dailyTokens.values.filter { $0 > 0 }.count
+        print("热力图: 近 22 周内 \(active) 天有记录")
     }
 
     private static func describe(_ window: QuotaWindow) {
@@ -57,13 +68,13 @@ enum DashboardDump {
         print("\(window.title): \(percent)  窗口内 \(tokens) tokens  重置：\(Format.reset(window.resetsAt))")
     }
 
-    private static func describe(_ snapshot: ToolSnapshot, _ granularity: Granularity) {
-        let counts = snapshot.totals[granularity] ?? TokenCounts()
+    private static func describe(_ usage: UsageSummary, _ granularity: Granularity) {
+        let counts = usage.totals[granularity] ?? TokenCounts()
         let head = "\(granularity.title): 合计 \(Format.grouped(counts.total))"
         let split = "输入 \(Format.compact(counts.input))  输出 \(Format.compact(counts.output))"
         let cache = "缓存读 \(Format.compact(counts.cacheRead))  缓存写 \(Format.compact(counts.cacheWrite))"
-        let money = "花费 \(Format.money(snapshot.costs[granularity]))"
-        let trend = "环比 \(Format.signedPercent(snapshot.tokenTrend[granularity] ?? 0))"
+        let money = "花费 \(Format.money(usage.costs[granularity]))"
+        let trend = "环比 \(Format.signedPercent(usage.tokenTrend(granularity)))"
         print("\(head)  \(split)  \(cache)  \(money)  \(trend)")
     }
 }

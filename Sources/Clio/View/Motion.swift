@@ -4,7 +4,6 @@ import SwiftUI
 /// critically damped, so values settle without overshoot.
 enum Motion {
     static let panel = 0.32
-    static let tool = 0.35
     static let period = 0.3
     static let figures = 0.5
     static let bars = 0.4

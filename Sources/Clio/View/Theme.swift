@@ -42,6 +42,12 @@ struct Theme {
     /// whatever sits behind the panel.
     var glassTint: Color
     var heatmap: [Color]
+    /// Each tool's color where their shares are drawn together.
+    var claudeSeries: Color
+    var codexSeries: Color
+    /// One color per model in the breakdown, handed out in this order. Blue and
+    /// orange are left out: they stand for the two tools in the same card.
+    var modelPalette: [Color]
 
     static let light = Theme(
         textPrimary: Color(hex: 0x1D1D1F),
@@ -71,7 +77,11 @@ struct Theme {
         positive: Color(hex: 0x34C759),
         glassTint: Color.white.opacity(0.35),
         heatmap: [Color(hex: 0xEBEBF0), Color(hex: 0xB9E3CD), Color(hex: 0x7DCBA3),
-                  Color(hex: 0x3FAA73), Color(hex: 0x1F8552)]
+                  Color(hex: 0x3FAA73), Color(hex: 0x1F8552)],
+        claudeSeries: Color(hex: 0xD97757),
+        codexSeries: Color(hex: 0x0A84FF),
+        modelPalette: [Color(hex: 0x1BAF7A), Color(hex: 0xEDA100), Color(hex: 0xE87BA4),
+                       Color(hex: 0x008300), Color(hex: 0x6250D6), Color(hex: 0xE34948)]
     )
 
     static let dark = Theme(
@@ -102,7 +112,11 @@ struct Theme {
         positive: Color(hex: 0x30D158),
         glassTint: Color.black.opacity(0.35),
         heatmap: [Color.white.opacity(0.08), Color(hex: 0x1F5C3E), Color(hex: 0x2F8557),
-                  Color(hex: 0x3FAA73), Color(hex: 0x6FD09B)]
+                  Color(hex: 0x3FAA73), Color(hex: 0x6FD09B)],
+        claudeSeries: Color(hex: 0xD0704F),
+        codexSeries: Color(hex: 0x0A84FF),
+        modelPalette: [Color(hex: 0x199E70), Color(hex: 0xC98500), Color(hex: 0xD55181),
+                       Color(hex: 0x008300), Color(hex: 0x9085E9), Color(hex: 0xE66767)]
     )
 
     static func resolve(_ scheme: ColorScheme) -> Theme {
@@ -115,6 +129,10 @@ struct Theme {
         var theme = self
         theme.heatmap[0] = textPrimary.opacity(0.08)
         return theme
+    }
+
+    func series(_ tool: Tool) -> Color {
+        tool == .claudeCode ? claudeSeries : codexSeries
     }
 
     /// Ring and bar color for a quota window: monochrome below half, orange

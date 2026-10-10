@@ -10,7 +10,10 @@ import SwiftUI
 struct UsageCard: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var snapshot: ToolSnapshot
+    /// Every tool together.
+    var usage: UsageSummary
+    /// Each tool on its own, split out beneath the total when there are two.
+    var parts: [ToolSnapshot]
     @Binding var granularity: Granularity
     @Binding var basis: ShareBasis
     /// The trend badge sits against the headline, whose width steps as the
@@ -18,13 +21,55 @@ struct UsageCard: View {
     @State private var isTrendShown = true
     @State private var trendReveal: Task<Void, Never>?
 
-    private var counts: TokenCounts { snapshot.totals[granularity] ?? TokenCounts() }
+    private var counts: TokenCounts { usage.totals[granularity] ?? TokenCounts() }
 
     /// Of the input that could have been served from cache, the share that was.
-    private var cacheHitRate: String {
+    static func cacheHitRate(_ counts: TokenCounts) -> String {
         let considered = counts.cacheRead + counts.input + counts.cacheWrite
         guard considered > 0 else { return "—" }
         return Format.percent(Double(counts.cacheRead) / Double(considered))
+    }
+
+    /// Each tool's share of one token figure, for the readout over it. Empty
+    /// with a single tool; tools with none are left out.
+    private func split(_ figure: (TokenCounts) -> Int) -> [TipRow] {
+        guard parts.count > 1 else { return [] }
+        return parts.compactMap { part in
+            let value = figure(part.usage.totals[granularity] ?? TokenCounts())
+            return value > 0 ? TipRow(tool: part.tool, value: Format.compact(value)) : nil
+        }
+    }
+
+    private var hitRateSplit: [TipRow] {
+        guard parts.count > 1 else { return [] }
+        return parts.compactMap { part in
+            let counts = part.usage.totals[granularity] ?? TokenCounts()
+            return counts.cacheRead + counts.input + counts.cacheWrite > 0
+                ? TipRow(tool: part.tool, value: Self.cacheHitRate(counts)) : nil
+        }
+    }
+
+    /// A tool without a price on file reads as a dash, which is why the total
+    /// does; a tool that spent nothing is left out.
+    private var costSplit: [TipRow] {
+        guard parts.count > 1 else { return [] }
+        return parts.compactMap { part in
+            let cost = part.usage.costs[granularity]
+            return cost == 0 ? nil : TipRow(tool: part.tool, value: Format.money(cost))
+        }
+    }
+
+    /// Models in the order they take colors: by this month's tokens, then by
+    /// the week's and the day's for any the month lacks. A model keeps its
+    /// color across periods and bases.
+    private var modelOrder: [String] {
+        var order: [String] = []
+        for granularity in [Granularity.month, .week, .day] {
+            for model in usage.models[granularity] ?? [] where !order.contains(model.model) {
+                order.append(model.model)
+            }
+        }
+        return order
     }
 
     var body: some View {
@@ -53,7 +98,8 @@ struct UsageCard: View {
                     // this the headline is scaled down and its baseline drifts
                     // off the trend badge beside it.
                     .layoutPriority(1)
-                TrendBadge(change: snapshot.tokenTrend[granularity] ?? 0)
+                    .hoverTip(split { $0.total }, alignment: .topLeading)
+                TrendBadge(change: usage.tokenTrend(granularity))
                     .opacity(isTrendShown ? 1 : 0)
                 // The spend group sits against the right edge, as drawn. The
                 // caption keeps to that edge too, so a counting figure beneath
@@ -64,16 +110,17 @@ struct UsageCard: View {
                         .font(.system(size: 9))
                         .foregroundStyle(theme.textTertiary)
                         .frame(height: 11)
-                    let cost = snapshot.costs[granularity]
+                    let cost = usage.costs[granularity]
                     RollingNumber(value: cost ?? 0) { cost == nil ? Format.money(nil) : Format.money($0) }
                         .animation(Motion.spring(Motion.figures, reduce: reduceMotion), value: granularity)
                         .font(.system(size: 14, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(theme.cost)
                         .lineLimit(1)
-                        .help(cost == nil ? "部分模型缺少价格，无法计算总花费" : "")
+                        .help(cost == nil && parts.count < 2 ? "部分模型缺少价格，无法计算总花费" : "")
                 }
                 .fixedSize()
+                .hoverTip(costSplit, alignment: .topTrailing)
             }
             .frame(height: 29)
             // The caption above the spend figure reaches higher than the row
@@ -82,8 +129,8 @@ struct UsageCard: View {
             .onChange(of: granularity) { old, new in
                 trendReveal?.cancel()
                 guard !reduceMotion else { return }
-                let delay = Self.countSettleTime(from: snapshot.totals[old]?.total ?? 0,
-                                                 to: snapshot.totals[new]?.total ?? 0)
+                let delay = Self.countSettleTime(from: usage.totals[old]?.total ?? 0,
+                                                 to: usage.totals[new]?.total ?? 0)
                 // A count that never changes width leaves the badge in place.
                 guard delay > 0 else {
                     isTrendShown = true
@@ -99,17 +146,23 @@ struct UsageCard: View {
 
             HStack(spacing: 6) {
                 StatColumn(title: "输入", value: Format.compactNarrow(counts.input))
+                    .hoverTip(split { $0.input }, alignment: .topLeading)
                 StatColumn(title: "输出", value: Format.compactNarrow(counts.output))
+                    .hoverTip(split { $0.output }, alignment: .topLeading)
                 StatColumn(title: "缓存读", value: Format.compactNarrow(counts.cacheRead))
+                    .hoverTip(split { $0.cacheRead }, alignment: .topLeading)
                 StatColumn(title: "缓存写", value: Format.compactNarrow(counts.cacheWrite))
+                    .hoverTip(split { $0.cacheWrite }, alignment: .topLeading)
                 // Right-aligned so the row ends on the card's edge, level with
                 // the spend figure above it.
-                StatColumn(title: "缓存命中", value: cacheHitRate, tint: theme.cost,
+                StatColumn(title: "缓存命中", value: Self.cacheHitRate(counts), tint: theme.cost,
                            alignment: .trailing)
+                    .hoverTip(hitRateSplit, alignment: .topTrailing)
             }
             .frame(height: 33)
 
-            UsageChart(buckets: snapshot.buckets[granularity] ?? [], granularity: granularity)
+            UsageChart(buckets: usage.buckets[granularity] ?? [], granularity: granularity,
+                       tools: parts.map(\.tool))
 
             // A hairline that takes up a whole point: the panel's height has to
             // land on one, or the window rounds up past its own content.
@@ -118,7 +171,7 @@ struct UsageCard: View {
                 .frame(height: 0.5)
                 .frame(height: 1)
 
-            ModelBreakdown(models: snapshot.models[granularity] ?? [], basis: $basis)
+            ModelBreakdown(models: usage.models[granularity] ?? [], colorOrder: modelOrder, basis: $basis)
         }
     }
 
@@ -152,10 +205,12 @@ private struct UsageChart: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var buckets: [Bucket]
     var granularity: Granularity
+    /// Stacked bottom-up in this order, each in its own color, when there are two.
+    var tools: [Tool]
 
     @State private var hovered: Int?
     @State private var plotWidth: CGFloat = 0
-    @State private var tipWidth: CGFloat = 0
+    @State private var tipSize: CGSize = .zero
 
     private var peak: Int { max(1, buckets.map(\.tokens).max() ?? 1) }
     private let spacing: CGFloat = 3
@@ -168,6 +223,22 @@ private struct UsageChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if tools.count > 1 {
+                HStack(spacing: 10) {
+                    ForEach(tools) { tool in
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(theme.series(tool))
+                                .frame(width: 6, height: 6)
+                            Text(tool.displayName)
+                        }
+                    }
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(theme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .frame(height: 12)
+            }
             ZStack(alignment: .topLeading) {
                 // Guides sit at fixed offsets in the 48pt plot, as drawn.
                 ForEach([12.0, 24.0, 36.0], id: \.self) { offset in
@@ -180,9 +251,11 @@ private struct UsageChart: View {
                 // bar from the height it had.
                 HStack(alignment: .bottom, spacing: spacing) {
                     ForEach(Array(buckets.enumerated()), id: \.offset) { index, bucket in
-                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                            .fill(theme.accent.opacity(hovered == nil || hovered == index ? 1 : 0.4))
-                            .frame(height: max(0, 48 * CGFloat(bucket.tokens) / CGFloat(peak)))
+                        StackedBar(shares: tools.count > 1
+                                       ? tools.map { (theme.series($0), bucket.byTool[$0] ?? 0) }
+                                       : [(theme.accent, bucket.tokens)],
+                                   height: max(0, 48 * CGFloat(bucket.tokens) / CGFloat(peak)))
+                            .opacity(hovered == nil || hovered == index ? 1 : 0.4)
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -227,18 +300,27 @@ private struct UsageChart: View {
         }
         .overlay(alignment: .topLeading) {
             if let hovered, buckets.indices.contains(hovered) {
-                HoverTip(text: HoverTip.pair(tipTitle(buckets[hovered]),
-                                            Format.compact(buckets[hovered].tokens)))
+                HoverTip { tipTable(buckets[hovered]) }
                     .background(
                         GeometryReader { geo in
-                            Color.clear.onChange(of: geo.size.width, initial: true) { _, width in
-                                tipWidth = width
+                            Color.clear.onChange(of: geo.size, initial: true) { _, size in
+                                tipSize = size
                             }
                         }
                     )
-                    .offset(x: tipOffset(for: hovered), y: -25)
+                    .offset(x: tipOffset(for: hovered), y: -tipSize.height - 2)
             }
         }
+    }
+
+    private func tipTable(_ bucket: Bucket) -> TipTable {
+        let rows = tools.count > 1
+            ? tools.compactMap { tool in
+                (bucket.byTool[tool] ?? 0) > 0
+                    ? TipRow(tool: tool, value: Format.compact(bucket.byTool[tool] ?? 0)) : nil
+            }
+            : []
+        return TipTable(title: tipTitle(bucket), total: Format.compact(bucket.tokens), rows: rows)
     }
 
     /// The axis is terse by design; the readout spells the period out.
@@ -265,7 +347,33 @@ private struct UsageChart: View {
     /// Centres the readout on its bar, kept inside the plot at either end.
     private func tipOffset(for index: Int) -> CGFloat {
         let centre = CGFloat(index) * barPitch + (barPitch - spacing) / 2
-        return min(max(0, centre - tipWidth / 2), max(0, plotWidth - tipWidth))
+        return min(max(0, centre - tipSize.width / 2), max(0, plotWidth - tipSize.width))
+    }
+}
+
+/// One bar, its shares stacked bottom-up with a one-point gap between them.
+private struct StackedBar: View {
+    var shares: [(color: Color, tokens: Int)]
+    var height: CGFloat
+
+    private let gap: CGFloat = 1
+
+    var body: some View {
+        let filled = shares.filter { $0.tokens > 0 }.count
+        let usable = max(0, height - gap * CGFloat(max(0, filled - 1)))
+        let total = CGFloat(max(1, shares.reduce(0) { $0 + $1.tokens }))
+        VStack(spacing: 0) {
+            // Every share keeps its place, empty or not, so heights animate
+            // from where they were when the period changes.
+            ForEach(Array(shares.enumerated()).reversed(), id: \.offset) { index, share in
+                Rectangle()
+                    .fill(share.color)
+                    .frame(height: usable * CGFloat(share.tokens) / total)
+                let below = shares[..<index].contains { $0.tokens > 0 }
+                Color.clear.frame(height: share.tokens > 0 && below ? gap : 0)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 1.5, style: .continuous))
     }
 }
 
@@ -275,19 +383,16 @@ private struct ModelBreakdown: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var models: [ModelUsage]
+    /// Model ids in the order they take the palette's colors.
+    var colorOrder: [String]
     @Binding var basis: ShareBasis
 
-    /// Dots and share-bar segments use different ramps in the design: the dots
-    /// are the lighter brand tints, the bar the saturated ones.
-    private static let dotPalette = [
-        Color(hex: 0xD97757), Color(hex: 0xE8A98E), Color(hex: 0xF3D3C5),
-        Color(hex: 0xB8572F), Color(hex: 0xE7C4B4),
-    ]
-
-    private static let barPalette = [
-        Color(hex: 0xC2410C), Color(hex: 0xF59E6B), Color(hex: 0x8A5A44),
-        Color(hex: 0xD97757), Color(hex: 0xE8A98E),
-    ]
+    /// Models past the palette share the tertiary gray.
+    private func color(_ model: ModelUsage) -> Color {
+        guard let index = colorOrder.firstIndex(of: model.model), index < theme.modelPalette.count
+        else { return theme.textTertiary }
+        return theme.modelPalette[index]
+    }
 
     private func weight(_ model: ModelUsage) -> Double {
         basis == .tokens ? Double(model.tokens) : (model.cost ?? 0)
@@ -323,14 +428,14 @@ private struct ModelBreakdown: View {
             GeometryReader { geo in
                 // Square-ended segments inside a rounded track: only the track's
                 // own ends are round, and the 2pt gaps show the track through.
-                let shown = ordered.filter { basis == .tokens || $0.cost != nil }.prefix(5)
+                let shown = ordered.filter { basis == .tokens || $0.cost != nil }
                 let usable = max(0, geo.size.width - 2 * CGFloat(max(0, shown.count - 1)))
                 ZStack(alignment: .leading) {
                     Capsule().fill(theme.shareTrack)
                     HStack(spacing: 2) {
-                        ForEach(Array(shown.enumerated()), id: \.element.id) { index, model in
+                        ForEach(shown) { model in
                             Rectangle()
-                                .fill(Self.barPalette[index % Self.barPalette.count])
+                                .fill(color(model))
                                 .frame(width: max(1, usable * weight(model) / total))
                         }
                     }
@@ -340,11 +445,11 @@ private struct ModelBreakdown: View {
             }
             .frame(height: 5)
 
-            ForEach(Array(ordered.prefix(5).enumerated()), id: \.element.id) { index, model in
+            ForEach(ordered) { model in
                 HStack(spacing: 8) {
                     HStack(spacing: 7) {
                         Circle()
-                            .fill(Self.dotPalette[index % Self.dotPalette.count])
+                            .fill(color(model))
                             .frame(width: 6, height: 6)
                         Text(model.displayName)
                             .font(.system(size: 12, weight: .medium))

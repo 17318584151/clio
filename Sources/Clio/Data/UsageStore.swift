@@ -36,13 +36,14 @@ actor LogReaders {
         return result
     }
 
-    /// Parses what is new, then builds each tool's dashboard. Building walks
-    /// every event and takes a few hundred milliseconds, so it stays here too.
-    func snapshots(prices: PriceTable, quota: [Tool: DashboardBuilder.QuotaConfig]) -> [ToolSnapshot] {
+    /// Parses what is new, then builds the dashboard. Building walks every
+    /// event and takes a few hundred milliseconds, so it stays here too.
+    func dashboard(prices: PriceTable, quota: [Tool: DashboardBuilder.QuotaConfig]) -> Dashboard {
         let parsed = refresh()
         let history = StatsCacheReader.dailyTokens()
 
         var snapshots: [ToolSnapshot] = []
+        var events: [UsageEvent] = []
         if parsed.claudeAvailable && !parsed.claudeEvents.isEmpty {
             let stored = UsageLedger.load(for: .claudeCode)
             let ledger = UsageLedger.updated(stored,
@@ -57,6 +58,7 @@ actor LogReaders {
                                                        prices: prices,
                                                        quota: quota[.claudeCode] ?? .init(),
                                                        ledger: ledger))
+            events += parsed.claudeEvents
         }
         if parsed.codexAvailable && !parsed.codexEvents.isEmpty {
             let stored = UsageLedger.load(for: .codex)
@@ -75,15 +77,18 @@ actor LogReaders {
                                                        prices: prices,
                                                        quota: config,
                                                        ledger: ledger))
+            events += parsed.codexEvents
         }
-        return snapshots
+        return Dashboard(snapshots: snapshots,
+                         combined: DashboardBuilder.combined(snapshots.map(\.usage), events: events),
+                         updatedAt: Date())
     }
 }
 
 /// Owns the readers, the refresh timer, and the current dashboard.
 @MainActor
 final class UsageStore: ObservableObject {
-    @Published private(set) var dashboard = Dashboard(snapshots: [], updatedAt: .distantPast)
+    @Published private(set) var dashboard = Dashboard(snapshots: [], combined: .empty, updatedAt: .distantPast)
     @Published private(set) var isLoading = true
     @Published private(set) var priceOrigin: PriceOrigin = .builtin
     /// When the price table was last read from models.dev.
@@ -180,17 +185,17 @@ final class UsageStore: ObservableObject {
             )
         }
 
-        let snapshots = await readers.snapshots(prices: prices, quota: quotaConfig)
+        let built = await readers.dashboard(prices: prices, quota: quotaConfig)
 
         priceOrigin = origin
         priceFetchedAt = fetchedAt
-        dashboard = Dashboard(snapshots: snapshots, updatedAt: Date())
+        dashboard = built
         isLoading = false
 
-        if !snapshots.contains(where: { $0.tool == prefs.selectedTool }), let first = snapshots.first {
+        if !built.snapshots.contains(where: { $0.tool == prefs.selectedTool }), let first = built.snapshots.first {
             prefs.selectedTool = first.tool
         }
-        checkMilestone(snapshots)
+        checkMilestone(built.combined)
         probeIfDue()
     }
 
@@ -220,9 +225,12 @@ final class UsageStore: ObservableObject {
 
     /// All three periods are watched: a calendar week can straddle a month
     /// boundary, and the day is what the panel shows by default.
-    private func checkMilestone(_ snapshots: [ToolSnapshot]) {
+    private func checkMilestone(_ usage: UsageSummary) {
         let previous = prefs.loadMilestones()
-        let current = Milestones.state(snapshots: snapshots, at: Date())
+        let current = Milestones.state(dayTokens: usage.totals[.day]?.total ?? 0,
+                                       weekTokens: usage.totals[.week]?.total ?? 0,
+                                       monthTokens: usage.totals[.month]?.total ?? 0,
+                                       at: Date())
         let fire = Milestones.shouldCelebrate(previous: previous, current: current)
         prefs.saveMilestones(Milestones.merged(previous: previous, current: current))
         if fire && prefs.confettiEnabled {
@@ -238,7 +246,7 @@ final class UsageStore: ObservableObject {
         return store
     }
 
-    func openLogDirectory() {
-        NSWorkspace.shared.open(prefs.selectedTool.logDirectory)
+    func openLogDirectory(for tool: Tool) {
+        NSWorkspace.shared.open(tool.logDirectory)
     }
 }

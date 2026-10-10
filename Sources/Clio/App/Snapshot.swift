@@ -93,10 +93,12 @@ enum Snapshot {
         scheme == .light ? Color(hex: 0xECECF0) : Color(hex: 0x1E1E20)
     }
 
-    /// All six menu-bar states from the design's close-up, stacked.
+    /// The merged item, then the six ring states from the design's close-up, stacked.
     private static func menuBarStrip() -> some View {
-        VStack(spacing: 0) {
-            ForEach(Array([(0.32, false, false), (0.62, false, false), (0.91, false, false),
+        let icon = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage
+        return VStack(spacing: 0) {
+            ForEach(Array([(nil, false, false), (nil, true, false), (nil, true, true),
+                           (0.32, false, false), (0.62, false, false), (0.91, false, false),
                            (0.62, true, false), (0.91, true, false), (0.91, true, true)].enumerated()),
                     id: \.offset) { _, state in
                 HStack {
@@ -104,7 +106,8 @@ enum Snapshot {
                     MenuBarLabel(fraction: state.0,
                                  text: Format.compact(1_243_610),
                                  isDark: state.1,
-                                 isSelected: state.2)
+                                 isSelected: state.2,
+                                 appIcon: state.0 == nil ? icon : nil)
                 }
                 .padding(.horizontal, 20)
                 .frame(width: 420, height: 44)

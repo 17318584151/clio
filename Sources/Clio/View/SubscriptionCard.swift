@@ -9,19 +9,18 @@ private struct QuotaTip {
     var y: CGFloat
 }
 
-/// The quota block: two rolling windows and an optional per-model allowance.
+/// The quota block: for each account, two rolling windows and an optional
+/// per-model allowance beneath the account's name and plan.
 ///
 /// A window with no reported utilisation shows the tokens it has actually
 /// consumed and when it resets. The percentage and its bar appear only once the
 /// account reports one — the allowance is not recorded locally, and the
 /// rate-limit rejections in the log do not imply a consistent one.
 struct SubscriptionCard: View {
-    var snapshot: ToolSnapshot
-    var showsHeader = true
+    @Environment(\.theme) private var theme
+    var snapshots: [ToolSnapshot]
 
-    /// The readout is drawn on the card rather than inside it: the card's own
-    /// hairlines are an overlay, and anything within the content is painted
-    /// under them.
+    /// The readout is drawn over the whole card, in the card's coordinates.
     @State private var tip: QuotaTip?
     @State private var tipWidth: CGFloat = 0
     @State private var cardWidth: CGFloat = 0
@@ -30,22 +29,31 @@ struct SubscriptionCard: View {
 
     var body: some View {
         Card {
-            if showsHeader {
-                HStack {
-                    CardTitle(text: "订阅")
+            ForEach(Array(snapshots.enumerated()), id: \.element.tool) { index, snapshot in
+                if index > 0 {
+                    // A hairline that takes up a whole point, as in the usage card.
+                    Rectangle()
+                        .fill(theme.separator)
+                        .frame(height: 0.5)
+                        .frame(height: 1)
+                }
+                HStack(spacing: 5) {
+                    BrandIcon(tool: snapshot.tool, size: 11,
+                              color: snapshot.tool.brandColor ?? theme.textSecondary)
+                    CardTitle(text: snapshot.tool.displayName)
                     Spacer()
                     if let plan = snapshot.plan, !plan.isEmpty {
                         PlanBadge(text: plan)
                     }
                 }
                 .frame(height: 19)
-            }
-            if let fiveHour = snapshot.fiveHour {
-                QuotaRow(window: fiveHour, onTip: { tip = $0 })
-            }
-            QuotaRow(window: snapshot.week, onTip: { tip = $0 })
-            if let modelQuota = snapshot.modelQuota {
-                QuotaRow(window: modelQuota, onTip: { tip = $0 })
+                if let fiveHour = snapshot.fiveHour {
+                    QuotaRow(window: fiveHour, onTip: { tip = $0 })
+                }
+                QuotaRow(window: snapshot.week, onTip: { tip = $0 })
+                if let modelQuota = snapshot.modelQuota {
+                    QuotaRow(window: modelQuota, onTip: { tip = $0 })
+                }
             }
         }
         .coordinateSpace(name: Self.space)

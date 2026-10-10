@@ -36,18 +36,18 @@ struct Card<Content: View>: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.cardFill, in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
-        // Two hairlines, as drawn: a light one inside the edge and a dark one
-        // on it. One stroke alone loses the glass edge.
-        .overlay(
-            RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous)
-                .inset(by: 0.25)
-                .strokeBorder(theme.cardInnerStroke, lineWidth: 0.5)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous)
-                .strokeBorder(theme.cardStroke, lineWidth: 0.5)
-        )
+        // Under the content, so a readout reaching past the card's edge is
+        // drawn over the hairlines.
+        .background {
+            let shape = RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous)
+            ZStack {
+                shape.fill(theme.cardFill)
+                // Two hairlines, as drawn: a light one inside the edge and a dark one
+                // on it. One stroke alone loses the glass edge.
+                shape.inset(by: 0.25).strokeBorder(theme.cardInnerStroke, lineWidth: 0.5)
+                shape.strokeBorder(theme.cardStroke, lineWidth: 0.5)
+            }
+        }
     }
 }
 
@@ -117,50 +117,6 @@ struct Segmented<Value: Hashable>: View {
                         .segmentFrame(option.value)
                         // An unselected segment draws nothing but its label, so
                         // without this only the glyphs answer a click.
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-}
-
-/// The tool switch: brand mark plus name, one segment per detected tool.
-struct ToolSwitch: View {
-    @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var tools: [Tool]
-    @Binding var selection: Tool
-    @State private var target: Tool?
-
-    var body: some View {
-        SegmentTrack(selection: $selection,
-                     target: $target,
-                     thumbRadius: 5,
-                     trackRadius: 8,
-                     inset: 2,
-                     spring: Motion.spring(Motion.tool, reduce: reduceMotion)) {
-            HStack(spacing: 0) {
-                ForEach(tools) { tool in
-                    let isSelected = tool == (target ?? selection)
-                    Button {
-                        selection = tool
-                    } label: {
-                        HStack(spacing: 6) {
-                            BrandIcon(tool: tool,
-                                      size: 12,
-                                      color: isSelected
-                                          ? (tool.brandColor ?? theme.segmentedSelectedText)
-                                          : theme.textSecondary)
-                            Text(tool.displayName)
-                        }
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(isSelected ? theme.segmentedSelectedText : theme.textSecondary)
-                        .scaleEffect(tool == target ? 1.12 : 1)
-                        .frame(height: 25)
-                        .frame(maxWidth: .infinity)
-                        .segmentFrame(tool)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -343,16 +299,21 @@ struct StatColumn: View {
     }
 }
 
-/// Readout shown while the pointer is over a bar or a heatmap cell. Dark in
-/// both themes, as drawn.
-struct HoverTip: View {
-    var text: Text
+/// Readout shown while the pointer is over a bar, a heatmap cell or a figure.
+/// Dark in both themes, as drawn.
+struct HoverTip<Content: View>: View {
     var arrowEdge: Edge?
+    var content: Content
+
+    init(arrowEdge: Edge? = nil, @ViewBuilder content: () -> Content) {
+        self.arrowEdge = arrowEdge
+        self.content = content()
+    }
 
     private let fill = Color(hex: 0x1E1E20, opacity: 0.92)
 
     var body: some View {
-        text
+        content
             .font(.system(size: 11))
             .monospacedDigit()
             .foregroundStyle(Color(hex: 0xF5F5F7))
@@ -372,9 +333,85 @@ struct HoverTip: View {
             .fixedSize()
             .allowsHitTesting(false)
     }
+}
 
-    /// A label and its figure, the shape both the chart and the heat map use.
-    static func pair(_ label: String, _ value: String) -> Text {
-        Text(label).foregroundColor(Color(hex: 0xA0A0A5)) + Text("  ") + Text(value).fontWeight(.semibold)
+extension HoverTip where Content == Text {
+    init(text: Text, arrowEdge: Edge? = nil) {
+        self.init(arrowEdge: arrowEdge) { text }
     }
 }
+
+/// One tool's figure in a readout.
+struct TipRow {
+    var tool: Tool
+    var value: String
+}
+
+/// A readout's figures: an optional heading with its total, then one row per
+/// tool behind a dot in the tool's chart color, names and figures in aligned
+/// columns. The readout is dark in both themes, so the dark set's colors are used.
+struct TipTable: View {
+    var title: String?
+    var total: String?
+    var rows: [TipRow] = []
+
+    private let label = Color(hex: 0xA0A0A5)
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
+            if let title {
+                GridRow {
+                    Text(title).foregroundStyle(label)
+                    Text(total ?? "").fontWeight(.semibold).gridColumnAlignment(.trailing)
+                }
+            }
+            ForEach(rows, id: \.tool) { row in
+                GridRow {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(Theme.dark.series(row.tool))
+                            .frame(width: 6, height: 6)
+                        Text(row.tool.displayName).foregroundStyle(label)
+                    }
+                    Text(row.value).fontWeight(.semibold)
+                }
+            }
+        }
+    }
+}
+
+/// Shows a readout of `rows` above the view while the pointer is over it.
+/// Nothing is shown without rows.
+private struct HoverTipModifier: ViewModifier {
+    var rows: [TipRow]
+    /// The edge the readout keeps to, so it stays inside the panel.
+    var alignment: Alignment
+
+    @State private var isHovered = false
+    @State private var height: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { isHovered = $0 }
+            .overlay(alignment: alignment) {
+                if isHovered, !rows.isEmpty {
+                    HoverTip { TipTable(rows: rows) }
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.onChange(of: geo.size.height, initial: true) { _, value in
+                                    height = value
+                                }
+                            }
+                        )
+                        .offset(y: -height - 4)
+                }
+            }
+    }
+}
+
+extension View {
+    func hoverTip(_ rows: [TipRow], alignment: Alignment) -> some View {
+        modifier(HoverTipModifier(rows: rows, alignment: alignment))
+    }
+}
+

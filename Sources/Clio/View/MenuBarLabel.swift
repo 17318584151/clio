@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The menu-bar item: the usage ring, and — depending on the setting — the
-/// window percentage or today's token count beside it. Rendered to a colored
-/// (non-template) image so the ring can turn orange and red.
+/// The menu-bar item: the usage ring, or the app icon when every tool is shown
+/// together, and — depending on the setting — the window percentage or today's
+/// token count beside it. Rendered to a colored (non-template) image so the
+/// ring can turn orange and red and the icon keeps its own colors.
 ///
 /// The open-state background is drawn here rather than left to the button's own
 /// highlight, which AppKit clears again when the click's mouse-up lands. The
@@ -13,6 +14,7 @@ struct MenuBarLabel: View {
     var text: String?
     var isDark: Bool
     var isSelected = false
+    var appIcon: NSImage?
 
     private var foreground: Color {
         isDark ? Color(hex: 0xF5F5F7) : Color(hex: 0x1D1D1F)
@@ -27,7 +29,17 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            UsageRing(fraction: fraction, color: ringColor, trackColor: foreground, size: 14)
+            if let appIcon {
+                // The icon file follows the macOS grid: its rounded square fills
+                // 824 of 1024 points, and the margin around it is transparent.
+                Image(nsImage: appIcon)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 16 * 1024 / 824, height: 16 * 1024 / 824)
+                    .frame(width: 16, height: 16)
+            } else {
+                UsageRing(fraction: fraction, color: ringColor, trackColor: foreground, size: 14)
+            }
             if let text {
                 Text(text)
                     .font(.system(size: 12, weight: .medium))

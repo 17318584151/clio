@@ -1,8 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// The popover. With both tools present the top row is a switch; with one it
-/// becomes a title row and the plan badge moves up beside the name.
+/// The popover. Usage is shown for every tool together; the subscription card
+/// lists each account's quota.
 struct PanelView: View {
     var onOpenSettings: () -> Void
     var initialGranularity: Granularity = .day
@@ -15,15 +15,10 @@ struct PanelView: View {
     @ObservedObject private var updater = Updater.shared
     @Environment(\.colorScheme) private var scheme
     @Environment(\.panelIsOpen) private var panelIsOpen
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isSnapshot) private var isSnapshot
     @State private var granularity: Granularity = .day
     @State private var basis: ShareBasis = .tokens
     @State private var didApplyInitial = false
-    /// Height of the page area and the tool it was measured for. It animates
-    /// only when it moves from one tool's page to the other's.
-    @State private var pageHeight: CGFloat?
-    @State private var pageHeightTool: Tool?
 
     private var theme: Theme { Theme.resolve(scheme) }
     /// Off-screen rendering can't draw the material, so snapshots keep the fills.
@@ -33,8 +28,8 @@ struct PanelView: View {
         Group {
             if store.isLoading {
                 LoadingView()
-            } else if let snapshot = current {
-                content(snapshot)
+            } else if !store.dashboard.isEmpty {
+                content(store.dashboard)
             } else {
                 EmptyStateView(onRescan: { Task { await store.refresh() } },
                                onSettings: onOpenSettings)
@@ -74,6 +69,10 @@ struct PanelView: View {
                 }
             }
         )
+        // Exactly the window's height and held to its top, so a new height never
+        // shifts the figures above the change while the window catches up.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
         .onAppear {
             guard !didApplyInitial else { return }
             didApplyInitial = true
@@ -81,91 +80,40 @@ struct PanelView: View {
         }
     }
 
-    private var current: ToolSnapshot? {
-        store.dashboard.snapshot(for: prefs.selectedTool) ?? store.dashboard.snapshots.first
-    }
-
     @ViewBuilder
-    private func content(_ snapshot: ToolSnapshot) -> some View {
+    private func content(_ dashboard: Dashboard) -> some View {
         VStack(spacing: 10) {
-            Group {
-                if store.dashboard.snapshots.count > 1 {
-                    ToolSwitch(tools: store.dashboard.snapshots.map(\.tool),
-                               selection: $prefs.selectedTool)
-                } else {
-                    HStack(spacing: 7) {
-                        BrandIcon(tool: snapshot.tool, size: 14, color: snapshot.tool.brandColor ?? theme.textPrimary)
-                        Text(snapshot.tool.displayName)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(theme.textPrimary)
-                        if let plan = snapshot.plan, !plan.isEmpty {
-                            PlanBadge(text: plan)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 2)
-                }
+            VStack(spacing: 10) {
+                SubscriptionCard(snapshots: dashboard.snapshots)
+                UsageCard(usage: dashboard.combined, parts: dashboard.snapshots,
+                          granularity: $granularity, basis: $basis)
+                ActivityCards(activity: dashboard.combined.activity, parts: dashboard.snapshots)
+                HeatmapCard(dailyTokens: dashboard.combined.dailyTokens, parts: dashboard.snapshots)
             }
             .padding(.horizontal, 12)
-
-            page(snapshot)
-            footer(snapshot)
+            footer(dashboard.updatedAt)
                 .padding(.horizontal, 12)
         }
         .padding(.top, 10)
         .padding(.bottom, 8)
     }
 
-    /// The selected tool's cards. Switching tools slides the old page out and
-    /// the new one in from the side of its segment, clipped at the panel's
-    /// edges, while the area's height moves from one page's to the other's.
-    private func page(_ snapshot: ToolSnapshot) -> some View {
-        ZStack(alignment: .top) {
-            VStack(spacing: 10) {
-                SubscriptionCard(snapshot: snapshot,
-                                 showsHeader: store.dashboard.snapshots.count > 1)
-                UsageCard(snapshot: snapshot, granularity: $granularity, basis: $basis)
-                ActivityCards(activity: snapshot.activity)
-                HeatmapCard(dailyTokens: snapshot.dailyTokens)
-            }
-            .padding(.horizontal, 12)
-            .fixedSize(horizontal: false, vertical: true)
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.onChange(of: proxy.size.height, initial: true) { _, height in
-                        pageMeasured(height, for: snapshot.tool)
-                    }
-                }
-            )
-            .id(snapshot.tool)
-            .transition(.move(edge: snapshot.tool == Tool.allCases.first ? .leading : .trailing))
-        }
-        .modifier(WholePointHeight(height: pageHeight ?? 0, isActive: pageHeight != nil))
-        .clipped()
-        .animation(Motion.spring(Motion.tool, reduce: reduceMotion), value: snapshot.tool)
-    }
-
-    private func pageMeasured(_ height: CGFloat, for tool: Tool) {
-        // The outgoing page still reports while it slides away.
-        guard tool == current?.tool else { return }
-        if pageHeightTool == tool || pageHeightTool == nil || reduceMotion {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                pageHeight = height
-                pageHeightTool = tool
-            }
-        } else {
-            withAnimation(Motion.spring(Motion.tool, reduce: false)) {
-                pageHeight = height
-                pageHeightTool = tool
+    /// The log directory, or a submenu with one per tool when there are two.
+    private var logItem: IconMenu.Item {
+        let tools = store.dashboard.snapshots.map(\.tool)
+        guard tools.count > 1 else {
+            return .init(title: "打开日志目录", shortcut: "l") {
+                store.openLogDirectory(for: tools.first ?? .claudeCode)
             }
         }
+        return .init(title: "打开日志目录", shortcut: "", submenu: tools.enumerated().map { index, tool in
+            .init(title: tool.displayName, shortcut: index == 0 ? "l" : "") { store.openLogDirectory(for: tool) }
+        }) {}
     }
 
-    private func footer(_ snapshot: ToolSnapshot) -> some View {
+    private func footer(_ updatedAt: Date) -> some View {
         HStack {
-            Text("更新于 \(Format.clock(snapshot.updatedAt)) · 本地读取")
+            Text("更新于 \(Format.clock(updatedAt)) · 本地读取")
                 .font(.system(size: 11))
                 .foregroundStyle(theme.textSecondary)
             if let release = updater.availableRelease {
@@ -206,7 +154,7 @@ struct PanelView: View {
                 .frame(width: 22, height: 22)
             IconMenu(symbol: "gearshape", tint: theme.textPrimary, items: [
                 .init(title: "刷新", shortcut: "r") { Task { await store.refresh() } },
-                .init(title: "打开日志目录", shortcut: "l") { store.openLogDirectory() },
+                logItem,
                 .init(title: "", shortcut: "") {},
                 .init(title: "设置…", shortcut: ",") { onOpenSettings() },
                 .init(title: "", shortcut: "") {},
@@ -220,23 +168,6 @@ struct PanelView: View {
         .onChange(of: panelIsOpen) { _, open in
             if !open { updater.acknowledgeUpdate() }
         }
-    }
-}
-
-/// Rounds the page area's height to a whole point on every animation frame.
-/// The window can only take whole points, and content shorter than the window
-/// is centred in it, which would shift the panel by a fraction each frame.
-private struct WholePointHeight: ViewModifier, Animatable {
-    var height: CGFloat
-    var isActive: Bool
-
-    var animatableData: CGFloat {
-        get { height }
-        set { height = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        content.frame(height: isActive ? height.rounded() : nil, alignment: .top)
     }
 }
 

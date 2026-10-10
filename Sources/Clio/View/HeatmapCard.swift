@@ -5,10 +5,12 @@ struct HeatmapCard: View {
     @Environment(\.theme) private var theme
     @Environment(\.panelIsOpen) private var panelIsOpen
     var dailyTokens: [Date: Int]
+    /// Each tool on its own, split out in the readout when there are two.
+    var parts: [ToolSnapshot] = []
 
     @State private var hovered: Date?
     @State private var gridWidth: CGFloat = 0
-    @State private var tipWidth: CGFloat = 0
+    @State private var tipSize: CGSize = .zero
 
     private let weeks = 22
     private let cell: CGFloat = 10
@@ -95,18 +97,15 @@ struct HeatmapCard: View {
             }
             .overlay(alignment: .topLeading) {
                 if let hovered {
-                    HoverTip(text: HoverTip.pair(Self.dayLabel.string(from: hovered),
-                                                (dailyTokens[hovered] ?? 0) > 0
-                                                    ? Format.compact(dailyTokens[hovered] ?? 0)
-                                                    : "无记录"))
+                    HoverTip { tipTable(hovered) }
                         .background(
                             GeometryReader { geo in
-                                Color.clear.onChange(of: geo.size.width, initial: true) { _, width in
-                                    tipWidth = width
+                                Color.clear.onChange(of: geo.size, initial: true) { _, size in
+                                    tipSize = size
                                 }
                             }
                         )
-                        .offset(x: tipOffset(for: hovered), y: -25)
+                        .offset(x: tipOffset(for: hovered), y: -tipSize.height - 2)
                 }
             }
 
@@ -131,6 +130,19 @@ struct HeatmapCard: View {
         return f
     }()
 
+    private func tipTable(_ day: Date) -> TipTable {
+        let tokens = dailyTokens[day] ?? 0
+        let rows = parts.count > 1
+            ? parts.compactMap { part in
+                (part.usage.dailyTokens[day] ?? 0) > 0
+                    ? TipRow(tool: part.tool, value: Format.compact(part.usage.dailyTokens[day] ?? 0)) : nil
+            }
+            : []
+        return TipTable(title: Self.dayLabel.string(from: day),
+                        total: tokens > 0 ? Format.compact(tokens) : "无记录",
+                        rows: rows)
+    }
+
     /// Cell under the pointer. Days after today are left without a readout —
     /// the current week's column is drawn in full but only partly recorded.
     private func day(at point: CGPoint) -> Date? {
@@ -145,7 +157,7 @@ struct HeatmapCard: View {
     private func tipOffset(for day: Date) -> CGFloat {
         guard let column = columns.firstIndex(where: { $0.contains(day) }) else { return 0 }
         let centre = CGFloat(column) * (cell + gap) + cell / 2
-        return min(max(0, centre - tipWidth / 2), max(0, gridWidth - tipWidth))
+        return min(max(0, centre - tipSize.width / 2), max(0, gridWidth - tipSize.width))
     }
 
     private func color(for day: Date) -> Color {

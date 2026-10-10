@@ -30,7 +30,7 @@ final class StatusItemController {
         // the object back sees the previous value; the hop lets it settle first.
         for publisher in [store.$dashboard.map { _ in () }.eraseToAnyPublisher(),
                           prefs.$menuBarDisplay.map { _ in () }.eraseToAnyPublisher(),
-                          prefs.$tokenSource.map { _ in () }.eraseToAnyPublisher(),
+                          prefs.$mergedMenuBar.map { _ in () }.eraseToAnyPublisher(),
                           prefs.$selectedTool.map { _ in () }.eraseToAnyPublisher()] {
             publisher
                 .receive(on: RunLoop.main)
@@ -73,41 +73,45 @@ final class StatusItemController {
         item.button.map { $0.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
     }
 
-    /// Which tool the menu-bar number is drawn from.
-    private var sourceSnapshot: ToolSnapshot? {
-        switch prefs.tokenSource {
-        case .selectedTool: return store.dashboard.snapshot(for: prefs.selectedTool) ?? store.dashboard.snapshots.first
-        case .claudeCode: return store.dashboard.snapshot(for: .claudeCode)
-        case .codex: return store.dashboard.snapshot(for: .codex)
-        }
-    }
+    private let appIcon = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage
 
     private func render() {
-        let snapshot = sourceSnapshot
-        // The ring follows the 5-hour window. Codex plans without one, such as
-        // Pro, report only the weekly allowance, so the ring uses that instead
-        // of drawing an empty circle beside the usage figure.
-        let fraction = snapshot?.fiveHour?.fraction
-            ?? (snapshot?.tool == .codex ? snapshot?.week.fraction : nil)
+        let dashboard = store.dashboard
+        let fraction: Double?
+        let todayTokens: Int?
+        if prefs.mergedMenuBar {
+            fraction = nil
+            todayTokens = dashboard.isEmpty ? nil : dashboard.combined.totals[.day]?.total ?? 0
+        } else {
+            let snapshot = dashboard.snapshot(for: prefs.selectedTool) ?? dashboard.snapshots.first
+            // The ring follows the 5-hour window. Codex plans without one, such as
+            // Pro, report only the weekly allowance, so the ring uses that instead
+            // of drawing an empty circle beside the usage figure.
+            fraction = snapshot?.fiveHour?.fraction
+                ?? (snapshot?.tool == .codex ? snapshot?.week.fraction : nil)
+            todayTokens = snapshot.map { ($0.usage.totals[.day] ?? TokenCounts()).total }
+        }
         let text: String?
-        switch prefs.menuBarDisplay {
+        switch prefs.effectiveMenuBarDisplay {
         case .iconOnly:
             text = nil
         case .iconAndWindowPercent:
             text = fraction.map(Format.percent)
         case .iconAndTodayTokens:
-            text = snapshot.map { Format.compact(($0.totals[.day] ?? TokenCounts()).total) }
+            text = todayTokens.map(Format.compact)
         }
 
         guard let button = item.button, let isDark = isMenuBarDark else { return }
         renderedDark = isDark
 
-        let label = MenuBarLabel(fraction: fraction, text: text, isDark: isDark, isSelected: isSelected)
+        let label = MenuBarLabel(fraction: fraction, text: text, isDark: isDark, isSelected: isSelected,
+                                 appIcon: prefs.mergedMenuBar ? appIcon : nil)
         let renderer = ImageRenderer(content: label)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let image = renderer.nsImage else { return }
         // Drawn in color rather than as a template so the ring can turn orange
-        // and red with the window, as the design specifies.
+        // and red with the window, as the design specifies, and the app icon
+        // keeps its own colors.
         image.isTemplate = false
         button.image = image
     }

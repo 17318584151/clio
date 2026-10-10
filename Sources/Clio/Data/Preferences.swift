@@ -18,22 +18,6 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     }
 }
 
-enum TokenSource: String, CaseIterable, Identifiable {
-    case selectedTool
-    case claudeCode
-    case codex
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .selectedTool: return "当前选中工具"
-        case .claudeCode: return "Claude Code"
-        case .codex: return "Codex"
-        }
-    }
-}
-
 enum Appearance: String, CaseIterable, Identifiable {
     case system, light, dark
 
@@ -62,7 +46,10 @@ final class Preferences: ObservableObject {
     /// How often Claude Code is asked for the quota state in the background.
     @Published var quotaInterval: TimeInterval { didSet { defaults.set(quotaInterval, forKey: "quotaInterval") } }
     @Published var menuBarDisplay: MenuBarDisplay { didSet { defaults.set(menuBarDisplay.rawValue, forKey: "menuBarDisplay") } }
-    @Published var tokenSource: TokenSource { didSet { defaults.set(tokenSource.rawValue, forKey: "tokenSource") } }
+    /// The menu bar shows the app icon and every tool's tokens together, rather
+    /// than the selected account's ring and tokens.
+    @Published var mergedMenuBar: Bool { didSet { defaults.set(mergedMenuBar, forKey: "mergedMenuBar") } }
+    /// The account the menu bar follows when not merged.
     @Published var selectedTool: Tool { didSet { defaults.set(selectedTool.rawValue, forKey: "selectedTool") } }
     @Published var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: "appearance") } }
     /// Takes effect only from macOS 26, where the material exists.
@@ -87,7 +74,7 @@ final class Preferences: ObservableObject {
             "refreshInterval": 30.0,
             "quotaInterval": 1800.0,
             "menuBarDisplay": MenuBarDisplay.iconAndTodayTokens.rawValue,
-            "tokenSource": TokenSource.selectedTool.rawValue,
+            "mergedMenuBar": true,
             "selectedTool": Tool.claudeCode.rawValue,
             "appearance": Appearance.system.rawValue,
             "liquidGlass": false,
@@ -98,7 +85,7 @@ final class Preferences: ObservableObject {
         refreshInterval = defaults.double(forKey: "refreshInterval")
         quotaInterval = defaults.double(forKey: "quotaInterval")
         menuBarDisplay = MenuBarDisplay(rawValue: defaults.string(forKey: "menuBarDisplay") ?? "") ?? .iconAndTodayTokens
-        tokenSource = TokenSource(rawValue: defaults.string(forKey: "tokenSource") ?? "") ?? .selectedTool
+        mergedMenuBar = defaults.bool(forKey: "mergedMenuBar")
         selectedTool = Tool(rawValue: defaults.string(forKey: "selectedTool") ?? "") ?? .claudeCode
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         liquidGlass = defaults.bool(forKey: "liquidGlass")
@@ -106,6 +93,12 @@ final class Preferences: ObservableObject {
         autoInstallUpdates = defaults.bool(forKey: "autoInstallUpdates")
         planName = defaults.dictionary(forKey: "planName") as? [String: String] ?? [:]
         launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    /// The merged item has no ring, so the window percentage gives way to the
+    /// token count there.
+    var effectiveMenuBarDisplay: MenuBarDisplay {
+        mergedMenuBar && menuBarDisplay == .iconAndWindowPercent ? .iconAndTodayTokens : menuBarDisplay
     }
 
     private func applyLaunchAtLogin() {

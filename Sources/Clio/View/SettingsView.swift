@@ -111,11 +111,17 @@ struct SettingsContent: View {
 
     private var theme: Theme { Theme.resolve(scheme) }
 
+    /// The detected tools, or both before any has been.
+    private var menuBarTools: [Tool] {
+        let detected = store.dashboard.snapshots.map(\.tool)
+        return detected.isEmpty ? Tool.allCases : detected
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
                 group {
                     row("100M Token 里程碑礼花",
-                        detail: "各工具分别统计，日、周或月累计每突破 100M 时全屏庆祝") {
+                        detail: "两个工具合计，日、周或月累计每突破 100M 时全屏庆祝") {
                         HStack(spacing: 10) {
                             Button("预览", action: onPreviewConfetti)
                                 .controlSize(.small)
@@ -147,18 +153,27 @@ struct SettingsContent: View {
                 }
 
                 section("菜单栏显示") {
-                    row("显示内容") {
-                        Picker("", selection: $prefs.menuBarDisplay) {
-                            ForEach(MenuBarDisplay.allCases) { Text($0.title).tag($0) }
+                    row("合并显示") {
+                        Toggle("", isOn: $prefs.mergedMenuBar).labelsHidden()
+                    }
+                    if !prefs.mergedMenuBar {
+                        divider
+                        row("账号") {
+                            Picker("", selection: $prefs.selectedTool) {
+                                ForEach(menuBarTools) { Text($0.displayName).tag($0) }
+                            }
+                            .labelsHidden()
+                            .controlSize(.small)
+                            .fixedSize()
                         }
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .fixedSize()
                     }
                     divider
-                    row("Token 数来源") {
-                        Picker("", selection: $prefs.tokenSource) {
-                            ForEach(TokenSource.allCases) { Text($0.title).tag($0) }
+                    row("显示内容") {
+                        Picker("", selection: Binding(get: { prefs.effectiveMenuBarDisplay },
+                                                      set: { prefs.menuBarDisplay = $0 })) {
+                            ForEach(MenuBarDisplay.allCases.filter {
+                                !prefs.mergedMenuBar || $0 != .iconAndWindowPercent
+                            }) { Text($0.title).tag($0) }
                         }
                         .labelsHidden()
                         .controlSize(.small)

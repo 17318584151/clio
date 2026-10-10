@@ -59,6 +59,9 @@ struct PriceTable: Codable, Equatable {
         "claude-sonnet-5": .make(input: 2, output: 10),
         "claude-sonnet-4-6": .make(input: 3, output: 15),
         "claude-haiku-4-5": .make(input: 1, output: 5),
+        // Codex's automatic review is free with a ChatGPT sign-in and has no
+        // published rate.
+        "codex-auto-review": .make(input: 0, output: 0),
     ])
 }
 

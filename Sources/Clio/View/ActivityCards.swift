@@ -4,6 +4,8 @@ import SwiftUI
 /// today was worked, and how much was asked of the model.
 struct ActivityCards: View {
     var activity: ActivitySummary
+    /// Each tool on its own, read out on hover when there are two.
+    var parts: [ToolSnapshot] = []
 
     var body: some View {
         HStack(spacing: 10) {
@@ -11,12 +13,26 @@ struct ActivityCards: View {
                         value: String(format: "%.1f", activity.activeHours),
                         unit: "小时",
                         detail: String(format: "昨日 %.1f 小时", activity.previousActiveHours),
-                        series: activity.activeTrend)
+                        series: activity.activeTrend,
+                        // Under 0.05 the figure reads 0.0.
+                        tip: split(when: { $0.activeHours >= 0.05 }) { String(format: "%.1f 小时", $0.activeHours) },
+                        tipAlignment: .topLeading)
             SummaryCard(title: "今日请求",
                         value: Format.grouped(activity.requests),
                         unit: nil,
                         detail: "\(activity.sessions) 个会话",
-                        series: activity.requestTrend)
+                        series: activity.requestTrend,
+                        tip: split(when: { $0.requests > 0 }) { "\(Format.grouped($0.requests)) · \($0.sessions) 个会话" },
+                        tipAlignment: .topTrailing)
+        }
+    }
+
+    /// One line per tool with something to show. Active hours need not add up
+    /// to the total: time spent in both tools at once counts once there.
+    private func split(when shown: (ActivitySummary) -> Bool, _ figure: (ActivitySummary) -> String) -> [TipRow] {
+        guard parts.count > 1 else { return [] }
+        return parts.compactMap { part in
+            shown(part.usage.activity) ? TipRow(tool: part.tool, value: figure(part.usage.activity)) : nil
         }
     }
 }
@@ -28,6 +44,8 @@ private struct SummaryCard: View {
     var unit: String?
     var detail: String
     var series: [Double]
+    var tip: [TipRow]
+    var tipAlignment: Alignment
 
     var body: some View {
         Card(spacing: 0) {
@@ -62,6 +80,7 @@ private struct SummaryCard: View {
                 Sparkline(values: series)
             }
         }
+        .hoverTip(tip, alignment: tipAlignment)
     }
 }
 
