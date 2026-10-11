@@ -43,8 +43,9 @@ struct MenuBarQuotaLabel: View {
             if let usedFraction {
                 Circle()
                     .trim(from: 0, to: 1 - min(1, max(0, usedFraction)))
+                    // Flat endpoints keep the visible arc within its quota proportion.
                     .stroke(color(for: Self.remainingPercent(usedFraction)),
-                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                            style: StrokeStyle(lineWidth: 1.5, lineCap: .butt))
                     .rotationEffect(.degrees(-90))
             }
         }

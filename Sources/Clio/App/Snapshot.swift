@@ -160,6 +160,8 @@ enum Snapshot {
         VStack(spacing: 0) {
             ForEach([false, true], id: \.self) { dark in
                 HStack(spacing: 24) {
+                    MenuBarQuotaLabel(claudeFraction: 0.30, codexFraction: 0.12,
+                                      isDark: dark, isSelected: true)
                     MenuBarQuotaLabel(claudeFraction: 0.28, codexFraction: 0.66, isDark: dark)
                     MenuBarQuotaLabel(claudeFraction: 0.92, codexFraction: 0.97, isDark: dark)
                     MenuBarQuotaLabel(claudeFraction: nil, codexFraction: nil, isDark: dark)
