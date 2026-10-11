@@ -6,6 +6,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     case iconOnly
     case iconAndTodayTokens
     case dualQuotaPercent
+    case dualQuotaAndTodayTokens
+    case dualQuotaAndSeparateTodayTokens
 
     var id: String { rawValue }
 
@@ -14,6 +16,26 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
         case .iconOnly: return "仅图标"
         case .iconAndTodayTokens: return "图标 + 今日 Token 数"
         case .dualQuotaPercent: return "双环 + 百分比"
+        case .dualQuotaAndTodayTokens: return "双环 + Token（合并显示）"
+        case .dualQuotaAndSeparateTodayTokens: return "双环 + Token（分开显示）"
+        }
+    }
+
+    var showsQuota: Bool {
+        self == .dualQuotaPercent || self == .dualQuotaAndTodayTokens || self == .dualQuotaAndSeparateTodayTokens
+    }
+
+    func todayTokenText(_ dashboard: Dashboard) -> String? {
+        guard !dashboard.isEmpty else { return nil }
+        switch self {
+        case .iconOnly, .dualQuotaPercent:
+            return nil
+        case .iconAndTodayTokens, .dualQuotaAndTodayTokens:
+            return Format.compact(dashboard.combined.totals[.day]?.total ?? 0)
+        case .dualQuotaAndSeparateTodayTokens:
+            return [Tool.claudeCode, .codex].map { tool in
+                Format.compact(dashboard.snapshot(for: tool)?.usage.totals[.day]?.total ?? 0, fractionDigits: 0)
+            }.joined(separator: " ")
         }
     }
 }

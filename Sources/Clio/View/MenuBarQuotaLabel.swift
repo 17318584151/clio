@@ -6,6 +6,8 @@ struct MenuBarQuotaLabel: View {
     var codexFraction: Double?
     var isDark: Bool
     var isSelected = false
+    var showsPercentages = true
+    var tokenText: String?
 
     private var foreground: Color {
         isDark ? Color(hex: 0xF5F5F7) : Color(hex: 0x1D1D1F)
@@ -21,8 +23,15 @@ struct MenuBarQuotaLabel: View {
                 ring(claudeFraction, size: 16)
                 ring(codexFraction, size: 9)
             }
-            percentage(claudeFraction)
-            percentage(codexFraction)
+            if showsPercentages {
+                percentage(claudeFraction)
+                percentage(codexFraction)
+            }
+            if let tokenText {
+                Text(tokenText)
+                    .foregroundStyle(foreground)
+                    .fixedSize()
+            }
         }
         .font(.system(size: 12, weight: .medium))
         .monospacedDigit()

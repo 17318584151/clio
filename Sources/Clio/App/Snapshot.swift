@@ -146,6 +146,12 @@ enum Snapshot {
                     MenuBarQuotaLabel(claudeFraction: 0.28, codexFraction: 0.66, isDark: dark)
                     MenuBarQuotaLabel(claudeFraction: 0.92, codexFraction: 0.97, isDark: dark)
                     MenuBarQuotaLabel(claudeFraction: nil, codexFraction: nil, isDark: dark)
+                    MenuBarQuotaLabel(claudeFraction: 0.28, codexFraction: 0.66, isDark: dark,
+                                      showsPercentages: false, tokenText: Format.compact(1_243_610))
+                    MenuBarQuotaLabel(claudeFraction: 0.28, codexFraction: 0.66, isDark: dark,
+                                      showsPercentages: false,
+                                      tokenText: [800_000, 443_610]
+                                          .map { Format.compact($0, fractionDigits: 0) }.joined(separator: " "))
                 }
                 .padding(16)
                 .background(dark ? Color(hex: 0x2A2A2D) : Color(hex: 0xE4E4E9))

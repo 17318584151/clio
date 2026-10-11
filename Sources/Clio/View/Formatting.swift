@@ -14,10 +14,10 @@ enum Format {
     }
 
     /// Compact form used in the menu bar and the per-model rows.
-    static func compact(_ value: Int) -> String {
+    static func compact(_ value: Int, fractionDigits: Int = 2) -> String {
         switch value {
         case 1_000_000...:
-            return String(format: "%.2fM", Double(value) / 1_000_000)
+            return String(format: "%.*fM", fractionDigits, Double(value) / 1_000_000)
         case 1_000...:
             return String(format: "%.0fK", Double(value) / 1_000)
         default:
