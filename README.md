@@ -172,6 +172,7 @@ Scripts/build.sh      # 出 build/Clio.app
 Scripts/package.sh    # 出 build/Clio-<版本>.dmg
 bash Scripts/test-usage-periods.sh  # 校验自然日周期和合并统计
 bash Scripts/test-usage.sh # 用量解析与聚合回归验证
+bash Scripts/test-quota-ring.sh # 校验内圈实际渲染的额度比例
 bash Scripts/test-ccusage-alignment.sh # ccusage 日志去重、累计差值与周一边界验证
 ```
 
