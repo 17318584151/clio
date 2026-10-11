@@ -32,18 +32,22 @@ mkdir -p "$build"
 rm -rf "$app"
 
 echo "编译…"
+bash "$root/Scripts/build-zstd.sh" "$build"
 swiftc \
     -target "$target" \
     -sdk "$sdk" \
     -swift-version 5 \
+    -I "$root/Sources/CZstd/include" \
     -O \
     -o "$build/Clio" \
+    "$build/zstddeclib.o" \
     $(find "$root/Sources" -name '*.swift')
 
 echo "组装 app bundle…"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$build/Clio" "$app/Contents/MacOS/"
 cp "$root/Resources/AppIcon.icns" "$app/Contents/Resources/"
+cp "$root/Sources/Clio/Resources/Zstandard-LICENSE.txt" "$app/Contents/Resources/"
 cp "$root/Resources/Info.plist" "$app/Contents/"
 cp -R "$root/Sources/Clio/Resources/CodexHelper" "$app/Contents/Resources/"
 clang -target "$target" -isysroot "$sdk" -Wall -Wextra -Werror -O2 \

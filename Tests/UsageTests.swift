@@ -15,6 +15,7 @@ enum UsageTests {
         try testUpgrade()
         try testCacheWrites()
         try testLegacyUsage()
+        try testCompressedLogs()
         testQuotaVisibility()
         testUnknownPrices()
         testZeroPrice()
@@ -29,7 +30,7 @@ enum UsageTests {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("16 usage regression scenarios passed")
+        print("17 usage regression scenarios passed")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -102,6 +103,79 @@ enum UsageTests {
             expect(result.usage.buckets[period]?.reduce(0, { $0 + $1.tokens }) == 2200, "\(period) chart must include archived usage")
         }
         expect(result.usage.dailyTokens.values.reduce(0, +) == 2200, "daily ledger must include archived usage")
+    }
+
+    private static func testCompressedLogs() throws {
+        // Zstandard 1.5.7 frames with checksums and no declared content size.
+        // The first contains session metadata, a model, and 110 tokens; the
+        // second adds a 220-token request with a different timestamp.
+        let first = Data(
+            base64Encoded:
+                "KLUv/QRYLQYAEo0mHXCn1QHWIzURPyhNwhDaEOo1wPQzRM0PZl/ph78mQ4wxpolpjtTbL2ka7ksCoKUEldRLpjln+JwaiSFqTseT8yVw7OXt4CrktGAHMk/mKYxAGiINEVBk8fPXUrM21i83uKF2aqCqGPKIfsbPD13b+kDbrUIOgT3E+JUUITSxlFmR11b9fLEn5yvtUUjv5am1IbeMWfnn+gr9JA8AIACOgRVv4OYMAW/HJmf0lBXHOeUTT5+BPRKLmSfrXMkAJG1AC3uUi89g"
+        )!
+        let second = Data(
+            base64Encoded:
+                "KLUv/QRYnQQAYokdHWA1bgOw/BA7Kr+pBapgkTKmKLg0sFExFCiCDIMcgffey6LQt5dI2V59TNRuHXOQDj4Yaxwzkb45ppI3eka2udRtlTf6ZVDJ8a3cMpJigNX6Y5fCLDu+cFIzFR1CHiIPIUCJrmfLduMl6eORtqRWHMDXM2P6TQkAOAZWvIGbMwS8HZuc0VPWON3fB4+AKHAUMg4Ipw=="
+        )!
+        let base = try directories("compressed")
+        let file = base.appending(path: "sessions/events.jsonl.zst")
+        try first.write(to: file)
+        let fixtureNow = ISO8601.date(from: "2026-10-10T12:01:00Z")!
+        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let initial = reader.refresh(now: fixtureNow).events
+        expect(initial.count == 1 && initial[0].counts.total == 110, "compressed session usage is counted")
+        expect(
+            initial.first?.model == "gpt-priced" && initial.first?.counts.cacheRead == 40,
+            "compressed logs retain model and cache breakdown")
+        expect(initial.first?.sessionID == "compressed-thread", "compressed session metadata is read")
+        expect(reader.refresh(now: fixtureNow).events.count == 1, "unchanged archives are not counted twice")
+        let scanner = LogScanner(root: base.appending(path: "sessions"))
+        expect(
+            scanner.scan { _, _ in } == 1 && scanner.scan { _, _ in } == 0,
+            "unchanged compressed files are not decompressed again")
+
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: second)
+        try handle.close()
+        expect(
+            reader.refresh(now: fixtureNow).events.reduce(0) { $0 + $1.counts.total } == 330,
+            "concatenated Zstandard frames are read after an archive changes")
+
+        let duplicate = try log(
+            base, "duplicate",
+            lines: [
+                #"{"timestamp":"2026-10-10T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10,"total_tokens":110},"total_token_usage":{"total_tokens":110}}}}"#,
+                #"{"timestamp":"2026-10-10T12:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200,"cached_input_tokens":80,"output_tokens":20,"total_tokens":220},"total_token_usage":{"total_tokens":330}}}}"#,
+            ])
+        expect(
+            reader.refresh(now: fixtureNow).events.count == 2, "plain and compressed copies are deduplicated")
+        try FileManager.default.removeItem(at: duplicate)
+        expect(
+            reader.refresh(now: fixtureNow).events.count == 2,
+            "compression preserves usage after the plain copy is removed")
+        let archived = base.appending(path: "archived_sessions/events.jsonl.zst")
+        try FileManager.default.moveItem(at: file, to: archived)
+        expect(
+            reader.refresh(now: fixtureNow).events.count == 2,
+            "moving compressed logs to archives preserves usage")
+        expect(
+            CodexReader(root: base.appending(path: "sessions")).refresh(now: fixtureNow).events.count == 2,
+            "a fresh reader imports compressed archived logs")
+
+        var corrupt = first + second
+        corrupt[corrupt.count - 1] ^= 1
+        try corrupt.write(to: archived, options: .atomic)
+        expect(reader.refresh(now: fixtureNow).events.isEmpty, "a checksum failure rejects the whole archive")
+        try (first + second.dropLast(2)).write(to: archived, options: .atomic)
+        expect(
+            reader.refresh(now: fixtureNow).events.isEmpty,
+            "an incomplete final frame does not import earlier frames")
+        try first.write(to: archived, options: .atomic)
+        expect(
+            reader.refresh(now: fixtureNow).events.count == 1, "repaired compressed archives are rescanned")
+        try FileManager.default.removeItem(at: archived)
+        expect(reader.refresh(now: fixtureNow).events.isEmpty, "deleted compressed logs disappear from usage")
     }
 
     private static func testArchiveMove() throws {

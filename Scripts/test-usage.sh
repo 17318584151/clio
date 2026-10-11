@@ -5,7 +5,9 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/clio-usage-tests.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 
+bash "$root/Scripts/build-zstd.sh" "$scratch"
 swiftc -swift-version 5 -module-cache-path "$scratch/module-cache" \
+    -I "$root/Sources/CZstd/include" "$scratch/zstddeclib.o" \
     -o "$scratch/usage-tests" \
     "$root/Sources/Clio/Model/Usage.swift" \
     "$root/Sources/Clio/Model/RateLimits.swift" \
