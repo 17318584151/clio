@@ -6,11 +6,10 @@ import SwiftUI
 struct SettingsView: View {
     var onPreviewConfetti: () -> Void = {}
 
-    @EnvironmentObject private var prefs: Preferences
     @Environment(\.colorScheme) private var scheme
 
     /// The window turns clear at the same time, so the glass shows the desktop.
-    private var usesGlass: Bool { prefs.liquidGlass && LiquidGlass.isAvailable }
+    private var usesGlass: Bool { LiquidGlass.isAvailable }
 
     var body: some View {
         let theme = Theme.resolve(scheme)
@@ -113,12 +112,6 @@ struct SettingsContent: View {
 
     private var theme: Theme { Theme.resolve(scheme) }
 
-    /// The detected tools, or both before any has been.
-    private var menuBarTools: [Tool] {
-        let detected = store.dashboard.snapshots.map(\.tool)
-        return detected.isEmpty ? Tool.allCases : detected
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             section("数据连接") {
@@ -144,42 +137,21 @@ struct SettingsContent: View {
             }
 
             section("菜单栏与外观") {
-                row("合并显示") {
-                    Toggle("", isOn: $prefs.mergedMenuBar).labelsHidden()
-                }
-                if !prefs.mergedMenuBar {
-                    row("账号") {
-                        Picker("", selection: $prefs.selectedTool) {
-                            ForEach(menuBarTools) { Text($0.displayName).tag($0) }
-                        }
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .fixedSize()
-                    }
-                }
                 row("显示内容") {
-                    Picker("", selection: Binding(get: { prefs.effectiveMenuBarDisplay },
-                                                  set: { prefs.menuBarDisplay = $0 })) {
-                        ForEach(MenuBarDisplay.allCases.filter {
-                            (prefs.mergedMenuBar ? $0 != .iconAndWindowPercent : $0 != .dualQuotaPercent)
-                        }) { Text($0.title).tag($0) }
+                    Picker("", selection: $prefs.menuBarDisplay) {
+                        ForEach(MenuBarDisplay.allCases) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
                     .controlSize(.small)
                     .fixedSize()
                 }
-                if prefs.effectiveMenuBarDisplay == .dualQuotaPercent {
+                if prefs.menuBarDisplay == .dualQuotaPercent {
                     row("额度预览", detail: "每周剩余 · Claude、Codex") {
                         MenuBarQuotaLabel(claudeFraction: store.dashboard.snapshot(for: .claudeCode)?.week.fraction,
                                           codexFraction: store.dashboard.snapshot(for: .codex)?.week.fraction,
                                           isDark: scheme == .dark)
                     }
                     .help("外圈 Claude · 内圈 Codex")
-                }
-                if LiquidGlass.isAvailable {
-                    row("液态玻璃") {
-                        Toggle("", isOn: $prefs.liquidGlass).labelsHidden()
-                    }
                 }
                 row("100M Token 礼花") {
                     HStack(spacing: 10) {

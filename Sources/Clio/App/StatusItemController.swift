@@ -29,9 +29,7 @@ final class StatusItemController {
         // `@Published` fires before the property is set, so a handler that reads
         // the object back sees the previous value; the hop lets it settle first.
         for publisher in [store.$dashboard.map { _ in () }.eraseToAnyPublisher(),
-                          prefs.$menuBarDisplay.map { _ in () }.eraseToAnyPublisher(),
-                          prefs.$mergedMenuBar.map { _ in () }.eraseToAnyPublisher(),
-                          prefs.$selectedTool.map { _ in () }.eraseToAnyPublisher()] {
+                          prefs.$menuBarDisplay.map { _ in () }.eraseToAnyPublisher()] {
             publisher
                 .receive(on: RunLoop.main)
                 .sink { [weak self] in self?.render() }
@@ -77,26 +75,11 @@ final class StatusItemController {
 
     private func render() {
         let dashboard = store.dashboard
-        let fraction: Double?
-        let todayTokens: Int?
-        if prefs.mergedMenuBar {
-            fraction = nil
-            todayTokens = dashboard.isEmpty ? nil : dashboard.combined.totals[.day]?.total ?? 0
-        } else {
-            let snapshot = dashboard.snapshot(for: prefs.selectedTool) ?? dashboard.snapshots.first
-            // The ring follows the 5-hour window. Codex plans without one, such as
-            // Pro, report only the weekly allowance, so the ring uses that instead
-            // of drawing an empty circle beside the usage figure.
-            fraction = snapshot?.fiveHour?.fraction
-                ?? (snapshot?.tool == .codex ? snapshot?.week.fraction : nil)
-            todayTokens = snapshot.map { ($0.usage.totals[.day] ?? TokenCounts()).total }
-        }
+        let todayTokens = dashboard.isEmpty ? nil : dashboard.combined.totals[.day]?.total ?? 0
         let text: String?
-        switch prefs.effectiveMenuBarDisplay {
-        case .iconOnly, .orbitIconOnly, .dualQuotaPercent:
+        switch prefs.menuBarDisplay {
+        case .iconOnly, .dualQuotaPercent:
             text = nil
-        case .iconAndWindowPercent:
-            text = fraction.map(Format.percent)
         case .iconAndTodayTokens:
             text = todayTokens.map(Format.compact)
         }
@@ -104,25 +87,21 @@ final class StatusItemController {
         guard let button = item.button, let isDark = isMenuBarDark else { return }
         renderedDark = isDark
 
-        let dualPercent = prefs.effectiveMenuBarDisplay == .dualQuotaPercent
+        let dualPercent = prefs.menuBarDisplay == .dualQuotaPercent
         let label = Group {
             if dualPercent {
                 MenuBarQuotaLabel(claudeFraction: dashboard.snapshot(for: .claudeCode)?.week.fraction,
                                   codexFraction: dashboard.snapshot(for: .codex)?.week.fraction,
                                   isDark: isDark, isSelected: isSelected)
             } else {
-                MenuBarLabel(fraction: fraction, text: text, isDark: isDark, isSelected: isSelected,
-                             appIcon: prefs.mergedMenuBar ? appIcon : nil,
-                             showOrbitIcon: prefs.effectiveMenuBarDisplay == .orbitIconOnly)
+                MenuBarLabel(text: text, isDark: isDark, isSelected: isSelected, appIcon: appIcon)
             }
         }
         button.toolTip = dualPercent ? quotaTooltip(dashboard) : nil
         let renderer = ImageRenderer(content: label)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let image = renderer.nsImage else { return }
-        // Drawn in color rather than as a template so the ring can turn orange
-        // and red with the window, as the design specifies, and the app icon
-        // keeps its own colors.
+        // The app icon retains its colors; quota rings use their threshold colors.
         image.isTemplate = false
         button.image = image
     }

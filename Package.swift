@@ -8,7 +8,7 @@ let package = Package(
         .executableTarget(
             name: "Clio",
             path: "Sources/Clio",
-            resources: [.copy("Resources/MenuBarOrbit.png"), .copy("Resources/CodexHelper")]
+            resources: [.copy("Resources/CodexHelper")]
         ),
         .executableTarget(name: "CodexHelper", path: "Tools/CodexHelper")
     ]

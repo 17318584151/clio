@@ -44,8 +44,6 @@ echo "组装 app bundle…"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$build/Clio" "$app/Contents/MacOS/"
 cp "$root/Resources/AppIcon.icns" "$app/Contents/Resources/"
-cp "$root/Sources/Clio/Resources/MenuBarOrbit.png" "$build/"
-cp "$build/MenuBarOrbit.png" "$app/Contents/Resources/"
 cp "$root/Resources/Info.plist" "$app/Contents/"
 cp -R "$root/Sources/Clio/Resources/CodexHelper" "$app/Contents/Resources/"
 clang -target "$target" -isysroot "$sdk" -Wall -Wextra -Werror -O2 \

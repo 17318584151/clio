@@ -1,12 +1,10 @@
 import AppKit
 import SwiftUI
-import Combine
 
 /// The standalone settings window.
 @MainActor
 final class SettingsWindowController {
     private var window: NSWindow?
-    private var cancellables: Set<AnyCancellable> = []
     private let store: UsageStore
     private let prefs: Preferences
     private let onPreviewConfetti: () -> Void
@@ -44,17 +42,10 @@ final class SettingsWindowController {
         // Liquid Glass shows what is behind the window only through a clear
         // one. The title bar turns clear with it; the settings view fades its
         // rows out before they reach the bar.
-        prefs.$liquidGlass
-            .removeDuplicates()
-            .sink { [weak window] isOn in
-                guard let window else { return }
-                let glass = isOn && LiquidGlass.isAvailable
-                window.isOpaque = !glass
-                window.backgroundColor = glass ? .clear : .windowBackgroundColor
-                window.titlebarAppearsTransparent = glass
-                window.invalidateShadow()
-            }
-            .store(in: &cancellables)
+        let glass = LiquidGlass.isAvailable
+        window.isOpaque = !glass
+        window.backgroundColor = glass ? .clear : .windowBackgroundColor
+        window.titlebarAppearsTransparent = glass
         _ = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
                                                    object: window,
                                                    queue: .main) { [weak self] _ in

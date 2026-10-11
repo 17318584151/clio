@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import Combine
 
 /// A borderless panel that behaves like a popover under the status item, but
 /// keeps the design's own corner radius and background instead of an arrow.
@@ -100,18 +99,11 @@ final class PanelController {
     /// Where the status item sits along the panel's top edge: the point the
     /// panel grows from.
     private var growthOriginX = Metrics.panelWidth / 2
-    private var cancellables: Set<AnyCancellable> = []
 
     init(store: UsageStore, prefs: Preferences, onOpenSettings: @escaping () -> Void) {
         self.store = store
         self.prefs = prefs
         self.onOpenSettings = onOpenSettings
-        prefs.$liquidGlass
-            .dropFirst()
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.swapBackdrop() }
-            .store(in: &cancellables)
     }
 
     /// Open, or opening. A panel still fading out counts as closed, so a click
@@ -329,11 +321,10 @@ final class PanelController {
         return panel
     }
 
-    /// Puts the blur behind the content, replacing any there already.
+    /// Installs the backdrop behind the panel content.
     private func installBackdrop(in container: NSView, holding hosting: NSView) {
-        let old = container.subviews
         let backdrop: NSView
-        if prefs.liquidGlass && LiquidGlass.isAvailable {
+        if LiquidGlass.isAvailable {
             // The panel view draws the glass itself. `NSGlassEffectView` is not
             // used: it lays its content out with constraints, and the content's
             // intrinsic height then pulls the content view off the window's size.
@@ -362,13 +353,6 @@ final class PanelController {
         hosting.autoresizingMask = [.width, .height]
         backdrop.addSubview(hosting)
         container.addSubview(backdrop)
-        old.forEach { $0.removeFromSuperview() }
-    }
-
-    private func swapBackdrop() {
-        guard let container, let hosting else { return }
-        installBackdrop(in: container, holding: hosting)
-        panel?.invalidateShadow()
     }
 
     /// A stretchable rounded rectangle: the corners are drawn once and the

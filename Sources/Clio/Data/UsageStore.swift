@@ -175,9 +175,6 @@ final class UsageStore: ObservableObject {
         dashboard = built
         isLoading = false
 
-        if !built.snapshots.contains(where: { $0.tool == prefs.selectedTool }), let first = built.snapshots.first {
-            prefs.selectedTool = first.tool
-        }
         checkMilestone(built.combined)
         probeIfDue()
     }

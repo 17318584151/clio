@@ -13,8 +13,8 @@ enum Snapshot {
         NSApplication.shared.setActivationPolicy(.prohibited)
 
         if CommandLine.arguments.contains("--menubar-only") {
+            write(menuBarStrip(), to: folder.appending(path: "menubar.png"))
             write(quotaMenuBarStrip(), to: folder.appending(path: "menubar-quota.png"))
-            write(orbitMenuBarStrip(), to: folder.appending(path: "menubar-orbit.png"))
             print("已输出到 \(folder.path)")
             exit(0)
         }
@@ -92,7 +92,6 @@ enum Snapshot {
 
             write(menuBarStrip(), to: folder.appending(path: "menubar.png"))
             write(quotaMenuBarStrip(), to: folder.appending(path: "menubar-quota.png"))
-            write(orbitMenuBarStrip(), to: folder.appending(path: "menubar-orbit.png"))
             write(confettiFrame(), to: folder.appending(path: "confetti.png"))
             print("已输出到 \(folder.path)")
             exit(0)
@@ -120,39 +119,20 @@ enum Snapshot {
         scheme == .light ? Color(hex: 0xECECF0) : Color(hex: 0x1E1E20)
     }
 
-    /// The merged item, then the six ring states from the design's close-up, stacked.
+    /// App icon and combined token count in light, dark, and selected appearances.
     private static func menuBarStrip() -> some View {
         let icon = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage
         return VStack(spacing: 0) {
-            ForEach(Array([(nil, false, false), (nil, true, false), (nil, true, true),
-                           (0.32, false, false), (0.62, false, false), (0.91, false, false),
-                           (0.62, true, false), (0.91, true, false), (0.91, true, true)].enumerated()),
+            ForEach(Array([(false, false), (true, false), (true, true)].enumerated()),
                     id: \.offset) { _, state in
                 HStack {
                     Spacer()
-                    MenuBarLabel(fraction: state.0,
-                                 text: Format.compact(1_243_610),
-                                 isDark: state.1,
-                                 isSelected: state.2,
-                                 appIcon: state.0 == nil ? icon : nil)
+                    MenuBarLabel(text: Format.compact(1_243_610), isDark: state.0,
+                                 isSelected: state.1, appIcon: icon)
                 }
                 .padding(.horizontal, 20)
                 .frame(width: 420, height: 44)
-                .background(state.1 ? Color(hex: 0x2A2A2D) : Color(hex: 0xE4E4E9))
-            }
-        }
-    }
-
-    private static func orbitMenuBarStrip() -> some View {
-        VStack(spacing: 0) {
-            ForEach([false, true], id: \.self) { dark in
-                HStack(spacing: 20) {
-                    MenuBarLabel(fraction: nil, text: nil, isDark: dark, showOrbitIcon: true)
-                    MenuBarLabel(fraction: nil, text: nil, isDark: dark,
-                                 isSelected: true, showOrbitIcon: true)
-                }
-                .padding(12)
-                .background(dark ? Color(hex: 0x2A2A2D) : Color(hex: 0xE4E4E9))
+                .background(state.0 ? Color(hex: 0x2A2A2D) : Color(hex: 0xE4E4E9))
             }
         }
     }

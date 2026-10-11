@@ -4,8 +4,6 @@ import ServiceManagement
 
 enum MenuBarDisplay: String, CaseIterable, Identifiable {
     case iconOnly
-    case orbitIconOnly
-    case iconAndWindowPercent
     case iconAndTodayTokens
     case dualQuotaPercent
 
@@ -14,8 +12,6 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .iconOnly: return "仅图标"
-        case .orbitIconOnly: return "仅图标 · 双轨"
-        case .iconAndWindowPercent: return "图标 + 窗口百分比"
         case .iconAndTodayTokens: return "图标 + 今日 Token 数"
         case .dualQuotaPercent: return "双环 + 百分比"
         }
@@ -50,14 +46,7 @@ final class Preferences: ObservableObject {
     /// How often Claude Code is asked for the quota state in the background.
     @Published var quotaInterval: TimeInterval { didSet { defaults.set(quotaInterval, forKey: "quotaInterval") } }
     @Published var menuBarDisplay: MenuBarDisplay { didSet { defaults.set(menuBarDisplay.rawValue, forKey: "menuBarDisplay") } }
-    /// The menu bar shows the app icon and every tool's tokens together, rather
-    /// than the selected account's ring and tokens.
-    @Published var mergedMenuBar: Bool { didSet { defaults.set(mergedMenuBar, forKey: "mergedMenuBar") } }
-    /// The account the menu bar follows when not merged.
-    @Published var selectedTool: Tool { didSet { defaults.set(selectedTool.rawValue, forKey: "selectedTool") } }
     @Published var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: "appearance") } }
-    /// Takes effect only from macOS 26, where the material exists.
-    @Published var liquidGlass: Bool { didSet { defaults.set(liquidGlass, forKey: "liquidGlass") } }
     @Published var autoCheckUpdates: Bool { didSet { defaults.set(autoCheckUpdates, forKey: "autoCheckUpdates") } }
     /// Applies only while `autoCheckUpdates` is on.
     @Published var autoInstallUpdates: Bool { didSet { defaults.set(autoInstallUpdates, forKey: "autoInstallUpdates") } }
@@ -78,10 +67,7 @@ final class Preferences: ObservableObject {
             "refreshInterval": 30.0,
             "quotaInterval": 1800.0,
             "menuBarDisplay": MenuBarDisplay.iconAndTodayTokens.rawValue,
-            "mergedMenuBar": true,
-            "selectedTool": Tool.claudeCode.rawValue,
             "appearance": Appearance.system.rawValue,
-            "liquidGlass": false,
             "autoCheckUpdates": true,
             "autoInstallUpdates": true,
         ])
@@ -89,22 +75,11 @@ final class Preferences: ObservableObject {
         refreshInterval = defaults.double(forKey: "refreshInterval")
         quotaInterval = defaults.double(forKey: "quotaInterval")
         menuBarDisplay = MenuBarDisplay(rawValue: defaults.string(forKey: "menuBarDisplay") ?? "") ?? .iconAndTodayTokens
-        mergedMenuBar = defaults.bool(forKey: "mergedMenuBar")
-        selectedTool = Tool(rawValue: defaults.string(forKey: "selectedTool") ?? "") ?? .claudeCode
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
-        liquidGlass = defaults.bool(forKey: "liquidGlass")
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
         autoInstallUpdates = defaults.bool(forKey: "autoInstallUpdates")
         planName = defaults.dictionary(forKey: "planName") as? [String: String] ?? [:]
         launchAtLogin = SMAppService.mainApp.status == .enabled
-    }
-
-    /// Keep the stored choice when toggling merged display, using a compatible
-    /// option while that choice is unavailable.
-    var effectiveMenuBarDisplay: MenuBarDisplay {
-        if mergedMenuBar && menuBarDisplay == .iconAndWindowPercent { return .iconAndTodayTokens }
-        if !mergedMenuBar && menuBarDisplay == .dualQuotaPercent { return .iconOnly }
-        return menuBarDisplay
     }
 
     private func applyLaunchAtLogin() {

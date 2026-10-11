@@ -22,7 +22,7 @@ struct PanelView: View {
 
     private var theme: Theme { Theme.resolve(scheme) }
     /// Off-screen rendering can't draw the material, so snapshots keep the fills.
-    private var usesGlass: Bool { prefs.liquidGlass && LiquidGlass.isAvailable && !isSnapshot }
+    private var usesGlass: Bool { LiquidGlass.isAvailable && !isSnapshot }
 
     var body: some View {
         Group {

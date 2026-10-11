@@ -77,25 +77,9 @@ struct UsageCard: View {
             HStack(spacing: 8) {
                 CardTitle(text: "Token 用量")
                 Spacer(minLength: 0)
-                HStack(spacing: 2) {
-                    ForEach(Granularity.allCases) { period in
-                        let selected = granularity == period
-                        Button {
-                            granularity = period
-                        } label: {
-                            Text(period.title)
-                                .font(.system(size: 10, weight: selected ? .semibold : .regular))
-                                .foregroundStyle(selected ? theme.textPrimary : theme.textSecondary)
-                                .padding(.horizontal, 6)
-                                .frame(height: 19)
-                                .background(selected ? theme.textPrimary.opacity(0.06) : .clear,
-                                            in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(selected ? .isSelected : [])
-                    }
-                }
+                Segmented(options: Granularity.allCases.map { ($0, $0.title, nil) },
+                          selection: $granularity,
+                          compact: true)
                 .fixedSize()
                 .help("本周和本月按自然周、自然月统计；近7天、近30天包含今天，按本地自然日统计")
             }

@@ -7,12 +7,8 @@ trap 'rm -rf "$scratch"' EXIT
 
 "$root/build/Clio" --snapshot "$scratch/standalone" --menubar-only
 "$root/build/Clio.app/Contents/MacOS/Clio" --snapshot "$scratch/bundled" --menubar-only
-for image in menubar-quota.png menubar-orbit.png; do
-    test -s "$scratch/standalone/$image"
-    cmp "$scratch/standalone/$image" "$scratch/bundled/$image"
-done
-
-cp "$root/build/Clio" "$scratch/Clio"
-"$scratch/Clio" --snapshot "$scratch/missing-resource" --menubar-only
-test -s "$scratch/missing-resource/menubar-orbit.png"
+test -s "$scratch/bundled/menubar.png"
+test -s "$root/build/Clio.app/Contents/Resources/AppIcon.icns"
+test -s "$scratch/standalone/menubar-quota.png"
+cmp "$scratch/standalone/menubar-quota.png" "$scratch/bundled/menubar-quota.png"
 echo "Menu bar resource checks passed"
