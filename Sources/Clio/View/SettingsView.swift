@@ -172,12 +172,20 @@ struct SettingsContent: View {
                         Picker("", selection: Binding(get: { prefs.effectiveMenuBarDisplay },
                                                       set: { prefs.menuBarDisplay = $0 })) {
                             ForEach(MenuBarDisplay.allCases.filter {
-                                !prefs.mergedMenuBar || $0 != .iconAndWindowPercent
+                                (prefs.mergedMenuBar ? $0 != .iconAndWindowPercent : $0 != .dualQuotaPercent)
                             }) { Text($0.title).tag($0) }
                         }
                         .labelsHidden()
                         .controlSize(.small)
                         .fixedSize()
+                    }
+                    if prefs.effectiveMenuBarDisplay == .dualQuotaPercent {
+                        divider
+                        row("外圈 Claude · 内圈 Codex", detail: "数字顺序：Claude、Codex；显示每周剩余额度") {
+                            MenuBarQuotaLabel(claudeFraction: store.dashboard.snapshot(for: .claudeCode)?.week.fraction,
+                                              codexFraction: store.dashboard.snapshot(for: .codex)?.week.fraction,
+                                              isDark: scheme == .dark)
+                        }
                     }
                 }
 

@@ -4,16 +4,20 @@ import ServiceManagement
 
 enum MenuBarDisplay: String, CaseIterable, Identifiable {
     case iconOnly
+    case orbitIconOnly
     case iconAndWindowPercent
     case iconAndTodayTokens
+    case dualQuotaPercent
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .iconOnly: return "仅图标"
+        case .orbitIconOnly: return "仅图标 · 双轨"
         case .iconAndWindowPercent: return "图标 + 窗口百分比"
         case .iconAndTodayTokens: return "图标 + 今日 Token 数"
+        case .dualQuotaPercent: return "双环 + 百分比"
         }
     }
 }
@@ -95,10 +99,12 @@ final class Preferences: ObservableObject {
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
-    /// The merged item has no ring, so the window percentage gives way to the
-    /// token count there.
+    /// Keep the stored choice when toggling merged display, using a compatible
+    /// option while that choice is unavailable.
     var effectiveMenuBarDisplay: MenuBarDisplay {
-        mergedMenuBar && menuBarDisplay == .iconAndWindowPercent ? .iconAndTodayTokens : menuBarDisplay
+        if mergedMenuBar && menuBarDisplay == .iconAndWindowPercent { return .iconAndTodayTokens }
+        if !mergedMenuBar && menuBarDisplay == .dualQuotaPercent { return .iconOnly }
+        return menuBarDisplay
     }
 
     private func applyLaunchAtLogin() {
