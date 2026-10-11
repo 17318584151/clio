@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Clio",
-            path: "Sources/Clio"
+            path: "Sources/Clio",
+            resources: [.copy("Resources/MenuBarOrbit.png")]
         )
     ]
 )

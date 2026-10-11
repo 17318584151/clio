@@ -64,15 +64,28 @@ struct MenuBarLabel: View {
 
 /// The reference orbit silhouette, tinted with the menu bar's foreground.
 private struct OrbitMenuBarIcon: View {
-    private static let image = NSImage(contentsOf:
-        Bundle.main.url(forResource: "MenuBarOrbit", withExtension: "png")!)!
+    private static let image: NSImage? = {
+        #if SWIFT_PACKAGE
+        let bundle = Bundle.module
+        #else
+        let bundle = Bundle.main
+        #endif
+        return bundle.url(forResource: "MenuBarOrbit", withExtension: "png")
+            .flatMap { NSImage(contentsOf: $0) }
+    }()
 
     var body: some View {
-        Image(nsImage: Self.image)
-            .renderingMode(.template)
-            .resizable()
-            .interpolation(.high)
-            .scaledToFit()
-            .frame(width: 18, height: 18)
+        Group {
+            if let image = Self.image {
+                Image(nsImage: image)
+                    .renderingMode(.template)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Circle().stroke(lineWidth: 1.5).padding(2)
+            }
+        }
+        .frame(width: 18, height: 18)
     }
 }

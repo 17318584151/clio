@@ -80,9 +80,11 @@ final class ClaudeCodeReader {
         let rawKey: String
         if let messageID {
             rawKey = requestID.map { "\(messageID)|\($0)" }
-                ?? "\(messageID)|\(sessionID)|\(Int64(timestamp.timeIntervalSince1970 * 1000))"
+                ?? "message|\(messageID)"
         } else {
-            rawKey = UUID().uuidString
+            rawKey = requestID.map { "request|\($0)" }
+                ?? (object["uuid"] as? String).map { "uuid|\($0)" }
+                ?? UUID().uuidString
         }
         let route = messageID.map { "\($0)|\(sessionID)" }
         let replayKey = route.flatMap { (isSidechain ? replayRoutes[$0] : sidechainRoutes[$0])?.first { key in

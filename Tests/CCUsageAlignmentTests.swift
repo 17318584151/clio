@@ -35,6 +35,7 @@ enum CCUsageAlignmentTests {
         try FileManager.default.createDirectory(at: claudeRoot, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: codexRoot, withIntermediateDirectories: true)
         let now = Date()
+        try testClaudeIdentity(root: root, now: now)
         let stamp = ISO8601DateFormatter().string(from: now.addingTimeInterval(-60))
         func assistant(
             _ id: String, _ request: String?, _ tokens: Int, sidechain: Bool = false,
@@ -151,5 +152,60 @@ enum CCUsageAlignmentTests {
             "ccusage weeks start Monday regardless of system locale")
         precondition(calendar.component(.day, from: week.lowerBound) == 5)
         print("ccusage alignment checks passed")
+    }
+
+    private static func testClaudeIdentity(root: URL, now: Date) throws {
+        func assistant(_ tokens: Int, messageID: String?, requestID: String? = nil,
+                       uuid: String, session: String = "main", seconds: Double = 0) throws -> String {
+            var message: [String: Any] = [
+                "model": "claude-test", "usage": ["input_tokens": tokens, "output_tokens": 0],
+            ]
+            message["id"] = messageID
+            var entry: [String: Any] = [
+                "type": "assistant", "uuid": uuid, "sessionId": session, "message": message,
+                "timestamp": ISO8601DateFormatter().string(from: now.addingTimeInterval(-60 + seconds)),
+            ]
+            entry["requestId"] = requestID
+            return String(data: try JSONSerialization.data(withJSONObject: entry), encoding: .utf8)!
+        }
+        let scenarios: [(String, [String], Int)] = try [
+            ("legacy-request", [
+                assistant(30, messageID: nil, requestID: "request", uuid: "first"),
+                assistant(30, messageID: nil, requestID: "request", uuid: "second"),
+            ], 30),
+            ("legacy-uuid", [
+                assistant(30, messageID: nil, uuid: "response"),
+                assistant(30, messageID: nil, uuid: "response", session: "resumed"),
+            ], 30),
+            ("stream-without-request", [
+                assistant(10, messageID: "stream", uuid: "partial"),
+                assistant(25, messageID: "stream", uuid: "complete", seconds: 1),
+            ], 25),
+            ("replay-without-request", [
+                assistant(30, messageID: "replay", uuid: "first"),
+                assistant(30, messageID: "replay", uuid: "second", session: "resumed", seconds: 1),
+            ], 30),
+        ]
+        for (name, lines, expected) in scenarios {
+            let directory = root.appending(path: name)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let file = directory.appending(path: "events.jsonl")
+            try Data((lines[0] + "\n").utf8).write(to: file)
+            let reader = ClaudeCodeReader(root: directory)
+            precondition(reader.refresh().events.count == 1, "\(name): initial response")
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data((lines[1] + "\n").utf8))
+            try handle.close()
+            let events = reader.refresh().events
+            precondition(events.count == 1 && events[0].counts.total == expected,
+                         "\(name): appended records retain one complete response")
+            try FileManager.default.copyItem(at: file, to: directory.appending(path: "copy.jsonl"))
+            precondition(reader.refresh().events.reduce(0) { $0 + $1.counts.total } == expected,
+                         "\(name): copied records do not duplicate usage")
+            try FileManager.default.removeItem(at: file)
+            precondition(reader.refresh().events.reduce(0) { $0 + $1.counts.total } == expected,
+                         "\(name): rebuilding preserves the surviving response")
+        }
     }
 }

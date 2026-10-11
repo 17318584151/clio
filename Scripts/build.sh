@@ -44,7 +44,8 @@ echo "组装 app bundle…"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$build/Clio" "$app/Contents/MacOS/"
 cp "$root/Resources/AppIcon.icns" "$app/Contents/Resources/"
-cp "$root/Resources/MenuBarOrbit.png" "$app/Contents/Resources/"
+cp "$root/Sources/Clio/Resources/MenuBarOrbit.png" "$build/"
+cp "$build/MenuBarOrbit.png" "$app/Contents/Resources/"
 cp "$root/Resources/Info.plist" "$app/Contents/"
 # A Developer ID signature is what lets the app open on someone else's Mac
 # without a Gatekeeper warning, and it is also what launch-at-login
