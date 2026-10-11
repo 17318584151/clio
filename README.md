@@ -90,11 +90,33 @@ Claude Code 应答前会把取到的额度连同获取时间写进 `~/.claude.js
 
 **Codex 额度**（默认，无需配置）。Codex 把额度写在会话日志的 `token_count` 事件里，字段是 `rate_limits`。`window_minutes` 为 10080（7 天）的窗口用 `used_percent` 和 `resets_at` 显示在「本周」；这是上一轮请求附带的快照，没有新的请求就不会更新。订阅记录未提供 5 小时窗口时，面板隐藏该行。套餐标识 `prolite` 显示为「Pro 5×」。额度百分比与本地 Token 累计分别统计。
 
+## CodexHelper
+
+设置的「数据连接」中，Codex 下的 CodexHelper 子条目只显示状态和一个按钮：未安装时显示「安装」，安装后显示「移除」。执行期间显示进度及管理员授权提示，结果或失败原因显示在状态位置。打开设置及每次安装前重新读取系统 HTTP 与 SOCKS5 代理地址和端口，缺失时读取已验证的 `~/.codex/.env` 本机代理，不预设端口。代理须已运行，支持无需认证的本机连接；安装前会验证两个代理端口可连接，检测失败时停止安装并显示原因。
+
+安装需要管理员权限、可用的系统 `/usr/bin/python3` 及本机 443 端口，执行以下操作：
+
+- 合并 `~/.codex/.env` 中的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY`，保留其他键与注释，文件权限设为 0600。HTTP/HTTPS 使用 HTTP 代理，ALL_PROXY 使用由代理解析域名的 SOCKS5。
+- 备份 `/etc/hosts` 到 `/Library/Application Support/CodexBackendRelay/hosts.before-<时间戳>`，仅维护 `BEGIN/END Codex backend relay` 标记内的 IPv4 与 IPv6 映射，刷新系统解析缓存。标记外已有同域名映射时停止安装。
+- 注册 `local.codex.backend-relay` 系统后台服务，开机启动并持续运行。进程名称为 `CodexHelper`，可执行文件安装在 `/Library/Application Support/CodexBackendRelay/CodexHelper`，为 root:wheel、0755；服务配置为 root:wheel、0644，服务目录为 0755。仅监听 `127.0.0.1:443` 与 `[::1]:443`，通过本机 SOCKS5 的域名连接固定转发至 `codex-cloud-backend.chatgpt.com:443`，透传加密字节。系统 Python 仅用于安装、移除和状态检测，不作为常驻转发进程。
+
+本机 TCP 443 端口必须可用；其他程序监听相同地址或通配地址的 443 端口时可能冲突，安装会停止并恢复本次修改。其他端口的监听不受影响。代理端口是转发程序连接的上游端口，由代理工具提供，CodexHelper 不监听这些端口。已安装的 Python 转发实例仍可识别和移除；使用新构建移除后重新安装，进程才会切换为 CodexHelper。
+
+域名映射对同机其他程序也生效。安装不修改 Codex 应用包、全局代理环境或代理工具的增强模式，不安装新运行时。已识别且配置一致的运行实例不会重复安装或申请管理员权限；并发安装受系统文件锁保护。安装失败时恢复本次修改的配置、权限及已有服务，恢复失败会在结果中列出。
+
+安装完成会分别验证 IPv4/IPv6 的加密连接及证书；这不能证明 Codex 登录和后台初始化成功。通过原应用图标重新启动 Codex，检查工作空间能否加载。Clio 不读取登录凭据，也不自动重启 Codex。最近一次操作结果保存在 Clio 支持目录的 `codex-helper-result.txt`。
+
+「移除」停止并删除转发服务，删除 hosts 中的 Codex 标记块，恢复由 Clio 改写的环境变量，并刷新解析缓存。安装后新增的 hosts 内容及用户后来修改的环境变量会保留。安装前的环境变量备份和安装记录仅供管理员读取；移除成功后删除这两份文件，hosts 备份继续保留。对没有 Clio 安装记录的手动安装实例，移除服务和 hosts 映射，保留手动设置的 `.env`。移除失败时恢复原服务与配置。
+
+开发验证：`bash Scripts/test-codex-helper.sh`，使用临时文件和随机本机端口，不操作系统安装实例。
+
+SwiftPM 开发构建需同时构建 Clio 与 CodexHelper 两个可执行目标；`swift build` 默认构建两者。应用打包使用 `Scripts/build.sh`，将原生转发程序编译并签名后放入应用资源目录。
+
 ## 数据与隐私
 
 - 只读本地日志：`~/.claude/projects/**/*.jsonl`、`~/.codex/sessions` 与 `~/.codex/archived_sessions`，从不写入这些数据源。Codex 会话归档后仍计入用量，活动日志与归档日志中重复的记录只计一次。
 - 不保存用量账本：刷新时读取原始数据源，不再读写 Clio 旧版的每日用量 JSON 文件；已有文件保留在原处。日志删除或替换后会重建内存统计，确保刷新与重启结果一致。
-- 应用自身发出的网络请求有两类：向 models.dev 取价格表；向 GitHub 查询与下载新版本。额度请求是 Claude Code 自己发的。
+- 应用向 models.dev 取价格表，向 GitHub 查询与下载新版本。额度请求是 Claude Code 自己发的。CodexHelper 安装时会验证 Codex 后台的加密连接，安装后由常驻服务转发该域名的流量。
 - 用量数据不离开本机。
 
 ## 安装

@@ -29,6 +29,7 @@ enum Snapshot {
             // rendered panel carries percentages rather than bare token counts.
             store.probeNow()
             try? await Task.sleep(nanoseconds: 6_000_000_000)
+            await CodexHelper.shared.refresh()
 
             for scheme in [ColorScheme.light, .dark] {
                 let name = scheme == .light ? "light" : "dark"
@@ -39,7 +40,7 @@ enum Snapshot {
                         .background(backdrop(scheme)),
                       to: folder.appending(path: "panel-\(name).png"))
 
-                write(SettingsContent()
+                writeNative(SettingsContent()
                         .environmentObject(store)
                         .environmentObject(prefs)
                         .environment(\.colorScheme, scheme)
@@ -179,5 +180,20 @@ enum Snapshot {
               let png = bitmap.representation(using: .png, properties: [:])
         else { return }
         try? png.write(to: url)
+    }
+
+    /// Off-screen settings rendering includes native AppKit controls.
+    private static func writeNative<V: View>(_ view: V, to url: URL) {
+        let host = NSHostingView(rootView: view.environment(\.isSnapshot, true))
+        host.frame = NSRect(origin: .zero, size: host.fittingSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        if let png = bitmap.representation(using: .png, properties: [:]) {
+            try? png.write(to: url)
+        }
+        withExtendedLifetime(window) {}
     }
 }

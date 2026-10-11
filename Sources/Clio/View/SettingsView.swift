@@ -106,8 +106,10 @@ struct SettingsContent: View {
     @EnvironmentObject private var prefs: Preferences
     @EnvironmentObject private var store: UsageStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.isSnapshot) private var isSnapshot
     @State private var bridgeState = StatusLineInstaller.state()
     @ObservedObject private var updater = Updater.shared
+    @ObservedObject private var codexHelper = CodexHelper.shared
 
     private var theme: Theme { Theme.resolve(scheme) }
 
@@ -118,170 +120,165 @@ struct SettingsContent: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-                group {
-                    row("100M Token 里程碑礼花",
-                        detail: "两个工具合计，日、周或月累计每突破 100M 时全屏庆祝") {
-                        HStack(spacing: 10) {
-                            Button("预览", action: onPreviewConfetti)
-                                .controlSize(.small)
-                            Toggle("", isOn: $prefs.confettiEnabled).labelsHidden()
-                        }
-                    }
-                    if LiquidGlass.isAvailable {
-                        divider
-                        row("液态玻璃") {
-                            Toggle("", isOn: $prefs.liquidGlass).labelsHidden()
-                        }
-                    }
-                    divider
-                    row("开机自启") {
-                        Toggle("", isOn: $prefs.launchAtLogin).labelsHidden()
-                    }
-                    divider
-                    row("刷新频率") {
-                        Picker("", selection: $prefs.refreshInterval) {
-                            Text("每 15 秒").tag(15.0)
-                            Text("每 30 秒").tag(30.0)
-                            Text("每 1 分钟").tag(60.0)
-                            Text("每 5 分钟").tag(300.0)
-                        }
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .fixedSize()
-                    }
-                }
-
-                section("菜单栏显示") {
-                    row("合并显示") {
-                        Toggle("", isOn: $prefs.mergedMenuBar).labelsHidden()
-                    }
-                    if !prefs.mergedMenuBar {
-                        divider
-                        row("账号") {
-                            Picker("", selection: $prefs.selectedTool) {
-                                ForEach(menuBarTools) { Text($0.displayName).tag($0) }
-                            }
-                            .labelsHidden()
-                            .controlSize(.small)
-                            .fixedSize()
-                        }
-                    }
-                    divider
-                    row("显示内容") {
-                        Picker("", selection: Binding(get: { prefs.effectiveMenuBarDisplay },
-                                                      set: { prefs.menuBarDisplay = $0 })) {
-                            ForEach(MenuBarDisplay.allCases.filter {
-                                (prefs.mergedMenuBar ? $0 != .iconAndWindowPercent : $0 != .dualQuotaPercent)
-                            }) { Text($0.title).tag($0) }
-                        }
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .fixedSize()
-                    }
-                    if prefs.effectiveMenuBarDisplay == .dualQuotaPercent {
-                        divider
-                        row("外圈 Claude · 内圈 Codex", detail: "数字顺序：Claude、Codex；显示每周剩余额度") {
-                            MenuBarQuotaLabel(claudeFraction: store.dashboard.snapshot(for: .claudeCode)?.week.fraction,
-                                              codexFraction: store.dashboard.snapshot(for: .codex)?.week.fraction,
-                                              isDark: scheme == .dark)
-                        }
-                    }
-                }
-
-                section("额度来源") {
-                    row("主动查询", detail: liveDetail) {
-                        Text(liveStatus)
-                            .font(.system(size: 12))
-                            .foregroundStyle(store.rateLimits == nil ? theme.textSecondary : theme.positive)
-                    }
-                    row("查询频率") {
-                        Picker("", selection: $prefs.quotaInterval) {
-                            Text("每 15 分钟").tag(900.0)
-                            Text("每 30 分钟").tag(1800.0)
-                            Text("每 1 小时").tag(3600.0)
-                            Text("每 2 小时").tag(7200.0)
-                        }
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .fixedSize()
-                    }
-                    divider
-                    row("状态栏推送", detail: bridgeDetail) {
-                        Button(bridgeState == .installed ? "移除" : "接入") {
-                            toggleBridge()
-                        }
-                        .controlSize(.small)
-                        .disabled(bridgeState == .unavailable)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(bridgeState == .installed
-                             ? "已写入 ~/.claude/settings.json 的 statusLine.command："
-                             : "按「接入」会把 statusLine.command 改写成：")
+        VStack(alignment: .leading, spacing: 16) {
+            section("数据连接") {
+                ForEach(Tool.allCases) { tool in
+                    HStack(spacing: 8) {
+                        BrandIcon(tool: tool, size: 14, color: tool.brandColor ?? theme.textPrimary)
+                        Text(tool.displayName)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(theme.textPrimary)
+                        Spacer()
+                        Text(store.dashboard.snapshot(for: tool) != nil ? "已读取" : "暂无数据")
                             .font(.system(size: 10))
                             .foregroundStyle(theme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(bridgeCommand)
-                            .font(.system(size: 10, design: .monospaced))
-                            .textSelection(.enabled)
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        StatusDot(isLive: store.dashboard.snapshot(for: tool) != nil)
                     }
                     .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
+                    .padding(.vertical, 10)
+                    .help(tool.logDirectoryDisplay)
+                    if tool == .claudeCode { claudeQuotaOptions }
+                    if tool == .codex { codexHelperOption }
+                    if tool != Tool.allCases.last { divider }
                 }
+            }
 
-                section("数据来源（只读本地）") {
-                    ForEach(Tool.allCases) { tool in
-                        HStack(spacing: 8) {
-                            BrandIcon(tool: tool, size: 13, color: tool.brandColor ?? theme.textPrimary)
-                            Text(tool.displayName)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(theme.textPrimary)
-                            Spacer()
-                            Text(tool.logDirectoryDisplay)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(theme.textSecondary)
-                            StatusDot(isLive: store.dashboard.snapshot(for: tool) != nil)
+            section("菜单栏与外观") {
+                row("合并显示") {
+                    Toggle("", isOn: $prefs.mergedMenuBar).labelsHidden()
+                }
+                if !prefs.mergedMenuBar {
+                    row("账号") {
+                        Picker("", selection: $prefs.selectedTool) {
+                            ForEach(menuBarTools) { Text($0.displayName).tag($0) }
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        if tool != Tool.allCases.last { divider }
-                    }
-                }
-
-                section("更新") {
-                    updateStatus
-                    divider
-                    row("自动检查更新") {
-                        Toggle("", isOn: $prefs.autoCheckUpdates).labelsHidden()
-                    }
-                    divider
-                    row("自动安装更新") {
-                        Toggle("", isOn: $prefs.autoInstallUpdates).labelsHidden()
-                            .disabled(!prefs.autoCheckUpdates)
-                    }
-                }
-
-                section("价格表") {
-                    row(priceSource, detail: priceDetail) {
-                        Button("立即更新") {
-                            Task {
-                                await PriceService.shared.refresh()
-                                await store.refresh()
-                            }
-                        }
+                        .labelsHidden()
                         .controlSize(.small)
+                        .fixedSize()
                     }
                 }
+                row("显示内容") {
+                    Picker("", selection: Binding(get: { prefs.effectiveMenuBarDisplay },
+                                                  set: { prefs.menuBarDisplay = $0 })) {
+                        ForEach(MenuBarDisplay.allCases.filter {
+                            (prefs.mergedMenuBar ? $0 != .iconAndWindowPercent : $0 != .dualQuotaPercent)
+                        }) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+                if prefs.effectiveMenuBarDisplay == .dualQuotaPercent {
+                    row("额度预览", detail: "每周剩余 · Claude、Codex") {
+                        MenuBarQuotaLabel(claudeFraction: store.dashboard.snapshot(for: .claudeCode)?.week.fraction,
+                                          codexFraction: store.dashboard.snapshot(for: .codex)?.week.fraction,
+                                          isDark: scheme == .dark)
+                    }
+                    .help("外圈 Claude · 内圈 Codex")
+                }
+                if LiquidGlass.isAvailable {
+                    row("液态玻璃") {
+                        Toggle("", isOn: $prefs.liquidGlass).labelsHidden()
+                    }
+                }
+                row("100M Token 礼花") {
+                    HStack(spacing: 10) {
+                        Button("预览", action: onPreviewConfetti)
+                            .controlSize(.small)
+                        Toggle("", isOn: $prefs.confettiEnabled).labelsHidden()
+                    }
+                }
+                .help("两个工具合计，日、周或月累计每突破 100M Token 时全屏庆祝")
+            }
+
+            section("通用") {
+                row("开机自启") {
+                    Toggle("", isOn: $prefs.launchAtLogin).labelsHidden()
+                }
+                row("本地数据刷新频率") {
+                    Picker("", selection: $prefs.refreshInterval) {
+                        Text("每 15 秒").tag(15.0)
+                        Text("每 30 秒").tag(30.0)
+                        Text("每 1 分钟").tag(60.0)
+                        Text("每 5 分钟").tag(300.0)
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+            }
+
+            section("更新") {
+                updateStatus
+                row("自动检查更新") {
+                    Toggle("", isOn: $prefs.autoCheckUpdates).labelsHidden()
+                }
+                row("自动安装更新") {
+                    Toggle("", isOn: $prefs.autoInstallUpdates).labelsHidden()
+                        .disabled(!prefs.autoCheckUpdates)
+                }
+                row(HStack(spacing: 6) {
+                    Text("价格表").foregroundStyle(theme.textPrimary)
+                    priceSource.font(.system(size: 10))
+                }, detail: priceDetail) {
+                    Button("立即更新") {
+                        Task {
+                            await PriceService.shared.refresh()
+                            await store.refresh()
+                        }
+                    }
+                    .controlSize(.small)
+                }
+            }
         }
         .font(.system(size: 12))
         .toggleStyle(.switch)
         .padding(20)
         .frame(width: 420, alignment: .leading)
         .onAppear { bridgeState = StatusLineInstaller.state() }
+        .task {
+            if !isSnapshot { await codexHelper.refresh() }
+        }
         .environment(\.theme, theme)
+    }
+
+    private var claudeQuotaOptions: some View {
+        VStack(spacing: 0) {
+            row("额度查询", detail: liveStatus) {
+                Picker("", selection: $prefs.quotaInterval) {
+                    Text("每 15 分钟").tag(900.0)
+                    Text("每 30 分钟").tag(1800.0)
+                    Text("每 1 小时").tag(3600.0)
+                    Text("每 2 小时").tag(7200.0)
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+            }
+            row("状态栏推送", detail: bridgeStatus) {
+                Button(bridgeState == .installed ? "移除" : "接入") {
+                    toggleBridge()
+                }
+                .controlSize(.small)
+                .disabled(bridgeState == .unavailable)
+            }
+        }
+        .padding(.leading, 22)
+    }
+
+    private var codexHelperOption: some View {
+        row("CodexHelper", detail: codexHelper.result.isEmpty ? codexHelper.status : codexHelper.result) {
+            Button(codexHelper.busy ? "正在处理…" : (codexHelper.installed ? "移除" : "安装")) {
+                Task {
+                    if codexHelper.installed { await codexHelper.remove() }
+                    else { await codexHelper.install() }
+                }
+            }
+            .controlSize(.small)
+            .disabled(codexHelper.busy)
+        }
+        .textSelection(.enabled)
+        .padding(.leading, 22)
     }
 
     // MARK: - Building blocks
@@ -326,6 +323,7 @@ struct SettingsContent: View {
                     detail
                         .font(.system(size: 10))
                         .foregroundStyle(theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()
@@ -335,39 +333,34 @@ struct SettingsContent: View {
         .padding(.vertical, 10)
     }
 
-    /// The update state: an icon tile with a title and sub line, then when it
-    /// was last checked and the button for the next step.
+    /// The app version, update status, and action.
     private var updateStatus: some View {
         let face = UpdateFace(updater.phase, lastChecked: updater.lastChecked, theme: theme)
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                UpdateIcon(icon: face.icon, tint: face.tint, quiet: face.quiet)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(face.title)
-                        .fontWeight(.medium)
-                        .foregroundStyle(theme.textPrimary)
-                    Group {
-                        if face.linksReleases {
-                            HStack(spacing: 0) {
-                                Text("从 ")
-                                LinkLabel(title: "GitHub Releases", url: Updater.releasesPage)
-                                Text(" 获取稳定版")
-                            }
-                        } else if let sub = face.sub {
-                            Text(sub)
+        return HStack(spacing: 10) {
+            UpdateIcon(icon: face.icon, tint: face.tint, quiet: face.quiet)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(face.title)
+                    .fontWeight(.medium)
+                    .foregroundStyle(theme.textPrimary)
+                Group {
+                    if face.linksReleases {
+                        HStack(spacing: 0) {
+                            Text("从 ")
+                            LinkLabel(title: "GitHub Releases", url: Updater.releasesPage)
+                            Text(" 获取稳定版")
                         }
+                    } else if let sub = face.sub {
+                        Text(sub)
                     }
-                    .font(.system(size: 10))
-                    .foregroundStyle(theme.textSecondary)
                 }
-            }
-            HStack {
+                .font(.system(size: 10))
+                .foregroundStyle(theme.textSecondary)
                 Text("\(face.foot)\(face.stamp.map(stamp) ?? Text(""))")
                     .font(.system(size: 10))
                     .foregroundStyle(theme.textSecondary)
-                Spacer()
-                updateButton(face)
             }
+            Spacer()
+            updateButton(face)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -430,20 +423,14 @@ struct SettingsContent: View {
         }
     }
 
-    /// What the button writes: this binary in front of whatever is configured.
-    private var bridgeCommand: String {
-        let binary = Bundle.main.executableURL?.path ?? "Clio"
-        return "\"\(binary)\" --statusline -- <原有 statusLine 命令>"
-    }
-
-    private var bridgeDetail: String {
+    private var bridgeStatus: String {
         switch bridgeState {
         case .installed:
-            return "Claude Code 每渲染一次状态栏就推送一次额度；原状态栏照常显示"
+            return "已接入"
         case .notInstalled:
-            return "让 Claude Code 主动推送额度，用它时几乎实时；不含按模型窗口"
+            return "未接入"
         case .unavailable:
-            return "读不到 ~/.claude/settings.json"
+            return "配置不可用"
         }
     }
 
@@ -463,14 +450,7 @@ struct SettingsContent: View {
     private var liveStatus: String {
         guard UsageProbe.executable != nil else { return "未找到 claude" }
         guard let snapshot = store.rateLimits else { return "暂无数据" }
-        return "已读取 · \(Format.clock(snapshot.updatedAt))"
-    }
-
-    private var liveDetail: String {
-        guard UsageProbe.executable != nil else {
-            return "找不到 claude 命令行，5 小时、本周与模型额度只能显示 Token 数"
-        }
-        return "展开面板时问一次，其余按下面的频率；失败时沿用上次结果"
+        return "最近读取 · \(Format.clock(snapshot.updatedAt))"
     }
 
     private func binding(_ key: ReferenceWritableKeyPath<Preferences, [String: String]>, _ tool: Tool) -> Binding<String> {
