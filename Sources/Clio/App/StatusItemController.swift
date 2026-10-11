@@ -75,29 +75,24 @@ final class StatusItemController {
 
     private func render() {
         let dashboard = store.dashboard
-        let todayTokens = dashboard.isEmpty ? nil : dashboard.combined.totals[.day]?.total ?? 0
-        let text: String?
-        switch prefs.menuBarDisplay {
-        case .iconOnly, .dualQuotaPercent:
-            text = nil
-        case .iconAndTodayTokens:
-            text = todayTokens.map(Format.compact)
-        }
+        let text = prefs.menuBarDisplay.todayTokenText(dashboard)
 
         guard let button = item.button, let isDark = isMenuBarDark else { return }
         renderedDark = isDark
 
-        let dualPercent = prefs.menuBarDisplay == .dualQuotaPercent
+        let showsQuota = prefs.menuBarDisplay.showsQuota
         let label = Group {
-            if dualPercent {
+            if showsQuota {
                 MenuBarQuotaLabel(claudeFraction: dashboard.snapshot(for: .claudeCode)?.week.fraction,
                                   codexFraction: dashboard.snapshot(for: .codex)?.week.fraction,
-                                  isDark: isDark, isSelected: isSelected)
+                                  isDark: isDark, isSelected: isSelected,
+                                  showsPercentages: prefs.menuBarDisplay == .dualQuotaPercent,
+                                  tokenText: text)
             } else {
                 MenuBarLabel(text: text, isDark: isDark, isSelected: isSelected, appIcon: appIcon)
             }
         }
-        button.toolTip = dualPercent ? quotaTooltip(dashboard) : nil
+        button.toolTip = showsQuota ? quotaTooltip(dashboard) : nil
         let renderer = ImageRenderer(content: label)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let image = renderer.nsImage else { return }

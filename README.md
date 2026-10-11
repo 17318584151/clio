@@ -42,9 +42,11 @@ macOS 菜单栏里的 Claude Code / Codex 用量面板：额度还剩多少、�
 
 <p align="center"><img src="docs/menubar.png" width="420" alt="菜单栏样式"></p>
 
-菜单栏固定展示两个工具的数据，可选择「仅图标」「图标 + 今日 Token 数」「双环 + 百分比」。今日 Token 数是 Claude Code 与 Codex 的合计。
+菜单栏固定展示两个工具的数据，可选择「仅图标」「图标 + 今日 Token 数」「双环 + 百分比」「双环 + Token（合并显示）」「双环 + Token（分开显示）」。带图标或合并显示的今日 Token 数是 Claude Code 与 Codex 的合计。
 
 「双环 + 百分比」的外圈为 Claude Code、内圈为 Codex，后方数字依次为 Claude Code、Codex，环长和数字均表示每周剩余额度。余量大于50%使用菜单栏文字色，20%～50%为橙色，低于20%为红色，未获取到额度时显示「—」。悬停显示工具名称、五小时剩余额度及每周重置时间。
+
+「双环 + Token」的两个选项沿用相同的额度双环和悬停提示。「合并显示」显示两个工具合计的今日 Token 数；「分开显示」依次显示 Claude Code、Codex 各自的今日 Token 数，使用 K/M 单位且不显示小数。
 
 ### 里程碑礼花
 

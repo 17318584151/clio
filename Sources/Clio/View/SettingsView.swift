@@ -145,11 +145,13 @@ struct SettingsContent: View {
                     .controlSize(.small)
                     .fixedSize()
                 }
-                if prefs.menuBarDisplay == .dualQuotaPercent {
+                if prefs.menuBarDisplay.showsQuota {
                     row("额度预览", detail: "每周剩余 · Claude、Codex") {
                         MenuBarQuotaLabel(claudeFraction: store.dashboard.snapshot(for: .claudeCode)?.week.fraction,
                                           codexFraction: store.dashboard.snapshot(for: .codex)?.week.fraction,
-                                          isDark: scheme == .dark)
+                                          isDark: scheme == .dark,
+                                          showsPercentages: prefs.menuBarDisplay == .dualQuotaPercent,
+                                          tokenText: prefs.menuBarDisplay.todayTokenText(store.dashboard))
                     }
                     .help("外圈 Claude · 内圈 Codex")
                 }
