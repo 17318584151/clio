@@ -114,7 +114,7 @@ SwiftPM 开发构建需同时构建 Clio 与 CodexHelper 两个可执行目标�
 
 ## 数据与隐私
 
-- 只读本地日志：`~/.claude/projects/**/*.jsonl`、`~/.codex/sessions` 与 `~/.codex/archived_sessions`，从不写入这些数据源。Codex 会话归档后仍计入用量，活动日志与归档日志中重复的记录只计一次。
+- 只读本地日志：`~/.claude/projects`、`~/.codex/sessions` 与 `~/.codex/archived_sessions` 中的 `.jsonl` 和 `.jsonl.zst`，从不写入这些数据源。Zstandard 解码器随应用打包，无需安装额外工具。压缩或归档后的会话仍计入用量，压缩前后及活动、归档日志中的重复记录只计一次。
 - 不保存用量账本：刷新时读取原始数据源，不再读写 Clio 旧版的每日用量 JSON 文件；已有文件保留在原处。日志删除或替换后会重建内存统计，确保刷新与重启结果一致。
 - 应用向 models.dev 取价格表，向 GitHub 查询与下载新版本。额度请求是 Claude Code 自己发的。CodexHelper 安装时会验证 Codex 后台的加密连接，安装后由常驻服务转发该域名的流量。
 - 用量数据不离开本机。

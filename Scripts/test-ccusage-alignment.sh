@@ -2,7 +2,9 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$root/build"
+bash "$root/Scripts/build-zstd.sh" "$root/build"
 swiftc -swift-version 5 -o "$root/build/ccusage-alignment-tests" \
+    -I "$root/Sources/CZstd/include" "$root/build/zstddeclib.o" \
     "$root/Sources/Clio/Model/Usage.swift" \
     "$root/Sources/Clio/Model/Pricing.swift" \
     "$root/Sources/Clio/Model/RateLimits.swift" \
