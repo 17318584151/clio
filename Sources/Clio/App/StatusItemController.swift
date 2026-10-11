@@ -93,7 +93,7 @@ final class StatusItemController {
         }
         let text: String?
         switch prefs.effectiveMenuBarDisplay {
-        case .iconOnly:
+        case .iconOnly, .orbitIconOnly, .dualQuotaPercent:
             text = nil
         case .iconAndWindowPercent:
             text = fraction.map(Format.percent)
@@ -104,8 +104,19 @@ final class StatusItemController {
         guard let button = item.button, let isDark = isMenuBarDark else { return }
         renderedDark = isDark
 
-        let label = MenuBarLabel(fraction: fraction, text: text, isDark: isDark, isSelected: isSelected,
-                                 appIcon: prefs.mergedMenuBar ? appIcon : nil)
+        let dualPercent = prefs.effectiveMenuBarDisplay == .dualQuotaPercent
+        let label = Group {
+            if dualPercent {
+                MenuBarQuotaLabel(claudeFraction: dashboard.snapshot(for: .claudeCode)?.week.fraction,
+                                  codexFraction: dashboard.snapshot(for: .codex)?.week.fraction,
+                                  isDark: isDark, isSelected: isSelected)
+            } else {
+                MenuBarLabel(fraction: fraction, text: text, isDark: isDark, isSelected: isSelected,
+                             appIcon: prefs.mergedMenuBar ? appIcon : nil,
+                             showOrbitIcon: prefs.effectiveMenuBarDisplay == .orbitIconOnly)
+            }
+        }
+        button.toolTip = dualPercent ? quotaTooltip(dashboard) : nil
         let renderer = ImageRenderer(content: label)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let image = renderer.nsImage else { return }
@@ -114,5 +125,25 @@ final class StatusItemController {
         // keeps its own colors.
         image.isTemplate = false
         button.image = image
+    }
+
+    private func quotaTooltip(_ dashboard: Dashboard) -> String {
+        [Tool.claudeCode, .codex].map { tool in
+            guard let snapshot = dashboard.snapshot(for: tool) else {
+                return "\(tool.displayName)：暂无额度数据"
+            }
+            let remaining = MenuBarQuotaLabel.remainingPercent(snapshot.week.fraction)
+                .map { "\($0)%" } ?? "—"
+            var lines = ["\(tool.displayName) · 每周剩余 \(remaining)"]
+            if let reset = snapshot.week.resetsAt {
+                lines.append("重置：\(reset.formatted(date: .abbreviated, time: .shortened))")
+            }
+            if let window = snapshot.fiveHour {
+                let remaining = MenuBarQuotaLabel.remainingPercent(window.fraction)
+                    .map { "\($0)%" } ?? "—"
+                lines.append("五小时剩余 \(remaining)")
+            }
+            return lines.joined(separator: "\n")
+        }.joined(separator: "\n\n")
     }
 }

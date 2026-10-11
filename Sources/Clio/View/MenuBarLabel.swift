@@ -15,6 +15,7 @@ struct MenuBarLabel: View {
     var isDark: Bool
     var isSelected = false
     var appIcon: NSImage?
+    var showOrbitIcon = false
 
     private var foreground: Color {
         isDark ? Color(hex: 0xF5F5F7) : Color(hex: 0x1D1D1F)
@@ -29,7 +30,10 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            if let appIcon {
+            if showOrbitIcon {
+                OrbitMenuBarIcon()
+                    .foregroundStyle(foreground)
+            } else if let appIcon {
                 // The icon file follows the macOS grid: its rounded square fills
                 // 824 of 1024 points, and the margin around it is transparent.
                 Image(nsImage: appIcon)
@@ -55,5 +59,20 @@ struct MenuBarLabel: View {
                     .fill(foreground.opacity(0.16))
             }
         }
+    }
+}
+
+/// The reference orbit silhouette, tinted with the menu bar's foreground.
+private struct OrbitMenuBarIcon: View {
+    private static let image = NSImage(contentsOf:
+        Bundle.main.url(forResource: "MenuBarOrbit", withExtension: "png")!)!
+
+    var body: some View {
+        Image(nsImage: Self.image)
+            .renderingMode(.template)
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(width: 18, height: 18)
     }
 }

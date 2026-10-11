@@ -12,6 +12,13 @@ enum Snapshot {
         // must not put anything on screen.
         NSApplication.shared.setActivationPolicy(.prohibited)
 
+        if CommandLine.arguments.contains("--menubar-only") {
+            write(quotaMenuBarStrip(), to: folder.appending(path: "menubar-quota.png"))
+            write(orbitMenuBarStrip(), to: folder.appending(path: "menubar-orbit.png"))
+            print("已输出到 \(folder.path)")
+            exit(0)
+        }
+
         let store = UsageStore()
         let prefs = Preferences.shared
 
@@ -66,6 +73,8 @@ enum Snapshot {
             }
 
             write(menuBarStrip(), to: folder.appending(path: "menubar.png"))
+            write(quotaMenuBarStrip(), to: folder.appending(path: "menubar-quota.png"))
+            write(orbitMenuBarStrip(), to: folder.appending(path: "menubar-orbit.png"))
             write(confettiFrame(), to: folder.appending(path: "confetti.png"))
             print("已输出到 \(folder.path)")
             exit(0)
@@ -112,6 +121,34 @@ enum Snapshot {
                 .padding(.horizontal, 20)
                 .frame(width: 420, height: 44)
                 .background(state.1 ? Color(hex: 0x2A2A2D) : Color(hex: 0xE4E4E9))
+            }
+        }
+    }
+
+    private static func orbitMenuBarStrip() -> some View {
+        VStack(spacing: 0) {
+            ForEach([false, true], id: \.self) { dark in
+                HStack(spacing: 20) {
+                    MenuBarLabel(fraction: nil, text: nil, isDark: dark, showOrbitIcon: true)
+                    MenuBarLabel(fraction: nil, text: nil, isDark: dark,
+                                 isSelected: true, showOrbitIcon: true)
+                }
+                .padding(12)
+                .background(dark ? Color(hex: 0x2A2A2D) : Color(hex: 0xE4E4E9))
+            }
+        }
+    }
+
+    private static func quotaMenuBarStrip() -> some View {
+        VStack(spacing: 0) {
+            ForEach([false, true], id: \.self) { dark in
+                HStack(spacing: 24) {
+                    MenuBarQuotaLabel(claudeFraction: 0.28, codexFraction: 0.66, isDark: dark)
+                    MenuBarQuotaLabel(claudeFraction: 0.92, codexFraction: 0.97, isDark: dark)
+                    MenuBarQuotaLabel(claudeFraction: nil, codexFraction: nil, isDark: dark)
+                }
+                .padding(16)
+                .background(dark ? Color(hex: 0x2A2A2D) : Color(hex: 0xE4E4E9))
             }
         }
     }
