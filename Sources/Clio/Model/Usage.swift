@@ -221,6 +221,12 @@ struct ToolSnapshot {
     let modelQuota: QuotaWindow?
     let usage: UsageSummary
     let updatedAt: Date
+
+    /// Prefer the short-term allowance when its percentage is available.
+    var menuBarQuota: QuotaWindow {
+        if let fiveHour, fiveHour.fraction != nil { return fiveHour }
+        return week
+    }
 }
 
 struct Dashboard {

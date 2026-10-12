@@ -83,8 +83,8 @@ final class StatusItemController {
         let showsQuota = prefs.menuBarDisplay.showsQuota
         let label = Group {
             if showsQuota {
-                MenuBarQuotaLabel(claudeFraction: dashboard.snapshot(for: .claudeCode)?.week.fraction,
-                                  codexFraction: dashboard.snapshot(for: .codex)?.week.fraction,
+                MenuBarQuotaLabel(claudeFraction: dashboard.snapshot(for: .claudeCode)?.menuBarQuota.fraction,
+                                  codexFraction: dashboard.snapshot(for: .codex)?.menuBarQuota.fraction,
                                   isDark: isDark, isSelected: isSelected,
                                   showsPercentages: prefs.menuBarDisplay == .dualQuotaPercent,
                                   tokenText: text)
@@ -106,18 +106,22 @@ final class StatusItemController {
             guard let snapshot = dashboard.snapshot(for: tool) else {
                 return "\(tool.displayName)：暂无额度数据"
             }
-            let remaining = MenuBarQuotaLabel.remainingPercent(snapshot.week.fraction)
-                .map { "\($0)%" } ?? "—"
-            var lines = ["\(tool.displayName) · 每周剩余 \(remaining)"]
-            if let reset = snapshot.week.resetsAt {
-                lines.append("重置：\(reset.formatted(date: .abbreviated, time: .shortened))")
+            let windows: [QuotaWindow]
+            if let fiveHour = snapshot.fiveHour {
+                windows = fiveHour.fraction != nil ? [fiveHour, snapshot.week] : [snapshot.week, fiveHour]
+            } else {
+                windows = [snapshot.week]
             }
-            if let window = snapshot.fiveHour {
+            let lines = windows.map { window in
                 let remaining = MenuBarQuotaLabel.remainingPercent(window.fraction)
                     .map { "\($0)%" } ?? "—"
-                lines.append("五小时剩余 \(remaining)")
+                var line = "\(window.title)剩余 \(remaining)"
+                if let reset = window.resetsAt {
+                    line += "\n重置：\(reset.formatted(date: .abbreviated, time: .shortened))"
+                }
+                return line
             }
-            return lines.joined(separator: "\n")
+            return "\(tool.displayName) · " + lines.joined(separator: "\n")
         }.joined(separator: "\n\n")
     }
 }

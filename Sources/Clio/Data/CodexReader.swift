@@ -182,7 +182,7 @@ final class CodexReader {
                                   sevenDay: week,
                                   modelScoped: [])
         if let plan = limits["plan_type"] as? String {
-            planName = PlanReader.displayName(for: plan)
+            planName = PlanReader.codexDisplayName(for: plan)
         }
     }
 

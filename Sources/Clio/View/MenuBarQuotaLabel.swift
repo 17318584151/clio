@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Remaining weekly quota: Claude on the outer ring, Codex on the inner ring.
+/// Remaining quota: Claude on the outer ring, Codex on the inner ring.
 struct MenuBarQuotaLabel: View {
     var claudeFraction: Double?
     var codexFraction: Double?
