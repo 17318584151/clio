@@ -87,9 +87,9 @@ struct PanelView: View {
         VStack(spacing: 10) {
             VStack(spacing: 10) {
                 SubscriptionCard(snapshots: dashboard.snapshots)
-                UsageCard(usage: usage, parts: parts,
-                          granularity: $granularity, basis: $basis)
+                UsageCard(usage: usage, parts: parts, granularity: $granularity)
                 ActivityCards(activity: usage.activity, parts: parts)
+                ModelBreakdownCard(usage: usage, granularity: granularity, basis: $basis)
                 HeatmapCard(dailyTokens: usage.dailyTokens, parts: parts)
             }
             .padding(.horizontal, 12)
@@ -148,7 +148,7 @@ struct PanelView: View {
             Spacer()
             if store.dashboard.snapshots.count > 1 {
                 IconMenu(symbol: "square.stack.3d.up",
-                         tint: prefs.usageScope.tool.map { theme.series($0) } ?? theme.textPrimary,
+                         tint: prefs.usageScope.tool == .claudeCode ? theme.series(.claudeCode) : theme.textPrimary,
                          tool: prefs.usageScope.tool, action: {
                     prefs.usageScope = prefs.usageScope.next
                 })

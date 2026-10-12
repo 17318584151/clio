@@ -155,6 +155,19 @@ struct SettingsContent: View {
                     }
                     .help("外圈 Claude · 内圈 Codex")
                 }
+                row("外观") {
+                    Picker("", selection: $prefs.appearance) {
+                        Text("跟随系统").tag(Appearance.system)
+                        Text("浅色").tag(Appearance.light)
+                        Text("深色").tag(Appearance.dark)
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+            }
+
+            section("通用") {
                 row("100M Token 礼花") {
                     HStack(spacing: 10) {
                         Button("预览", action: onPreviewConfetti)
@@ -163,9 +176,7 @@ struct SettingsContent: View {
                     }
                 }
                 .help("两个工具合计，日、周或月累计每突破 100M Token 时全屏庆祝")
-            }
 
-            section("通用") {
                 row("开机自启") {
                     Toggle("", isOn: $prefs.launchAtLogin).labelsHidden()
                 }
@@ -242,8 +253,8 @@ struct SettingsContent: View {
 
     private var codexHelperOption: some View {
         row("CodexHelper", detail: codexHelper.result.isEmpty ? codexHelper.status : codexHelper.result) {
-            if codexHelper.needsUpdate {
-                Button("更新") { Task { await codexHelper.install() } }
+            if codexHelper.needsUpdate || codexHelper.needsRepair {
+                Button(codexHelper.needsUpdate ? "更新" : "修复") { Task { await codexHelper.install() } }
                     .controlSize(.small)
                     .disabled(codexHelper.busy)
             }

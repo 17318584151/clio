@@ -105,12 +105,16 @@ class InstallerTests(unittest.TestCase):
             return os.stat_result(info)
         return patch.object(Path, 'stat', owned_stat)
 
-    def next_build(self):
-        folder = self.root / 'next-build'
-        folder.mkdir()
+    def next_build(self, version=None):
+        folder = Path(tempfile.mkdtemp(prefix='next-build-', dir=self.root))
         shutil.copy2(self.helper.native_source, folder / 'CodexHelper')
         bundle = folder / 'CodexHelper.app'
         shutil.copytree(self.helper.native_source.with_name('CodexHelper.app'), bundle)
+        if version is not None:
+            info_path = bundle / 'Contents/Info.plist'
+            info = plistlib.loads(info_path.read_bytes())
+            info['CFBundleVersion'] = version
+            info_path.write_bytes(plistlib.dumps(info))
         subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--options', 'runtime', str(bundle)],
                        capture_output=True, check=True)
         self.helper.native_source = folder / 'CodexHelper'
@@ -164,6 +168,11 @@ class InstallerTests(unittest.TestCase):
 
     def test_legacy_native_service_upgrades_to_icon_bundle(self):
         self.legacy_installation()
+        self.helper.hosts.write_text(install.merge_hosts(self.helper.hosts.read_text()))
+        self.helper.env.write_text(install.merge_env(self.helper.env.read_text(),
+            f'http://127.0.0.1:{self.http.getsockname()[1]}',
+            f'socks5h://127.0.0.1:{self.socks.getsockname()[1]}'))
+        self.helper.env.chmod(0o600)
         before = {path: path.read_bytes() for path in [self.helper.env, self.helper.hosts]}
         with self.root_permissions(), patch.object(self.helper, 'compatible', side_effect=lambda: install.Installer.compatible(self.helper)):
             self.assertTrue(self.helper.compatible())
@@ -203,11 +212,11 @@ class InstallerTests(unittest.TestCase):
             self.helper.legacy_program.write_bytes(binary + b'modified')
             self.assertFalse(install.Installer.compatible(self.helper))
 
-    def test_rebuilt_source_recognizes_and_upgrades_installed_bundle(self):
+    def test_new_helper_version_upgrades_installed_bundle(self):
         self.perform()
         previous = self.helper.bundle_hashes()
         before = {path: path.read_bytes() for path in [self.helper.env, self.helper.hosts]}
-        self.next_build()
+        self.next_build(version='2')
         self.assertNotEqual(previous, self.helper.bundle_hashes(source=True))
         with self.root_permissions(), patch.object(self.helper, 'compatible', side_effect=lambda: install.Installer.compatible(self.helper)):
             self.assertTrue(self.helper.compatible())
@@ -217,6 +226,38 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse(install.Installer.status(self.helper)['needsUpdate'])
         for path, data in before.items():
             self.assertEqual(path.read_bytes(), data)
+
+    def test_same_version_rebuild_does_not_require_update_or_reinstall(self):
+        self.perform()
+        self.next_build()
+        self.assertNotEqual(self.helper.bundle_hashes(), self.helper.bundle_hashes(source=True))
+        with self.root_permissions(), \
+                patch.object(self.helper, 'compatible', side_effect=lambda: install.Installer.compatible(self.helper)), \
+                patch.object(self.helper, 'status', side_effect=lambda *args: install.Installer.status(self.helper, *args)), \
+                patch.object(self.helper, 'running', return_value=True):
+            state = self.helper.status()
+            self.assertTrue(state['installed'])
+            self.assertTrue(state['ready'])
+            self.assertFalse(state['needsUpdate'])
+            self.helper.calls.clear()
+            self.assertIn('无需更改', self.perform())
+            self.assertFalse(any(call[0] == '/bin/launchctl' for call in self.helper.calls))
+
+    def test_older_bundled_version_does_not_offer_downgrade(self):
+        self.next_build(version='2')
+        self.perform()
+        self.next_build(version='1')
+        with self.root_permissions(), patch.object(self.helper, 'running', return_value=True):
+            state = install.Installer.status(self.helper)
+            self.assertFalse(state['needsUpdate'])
+            self.assertTrue(state['ready'])
+
+    def test_version_comparison_is_numeric(self):
+        self.next_build(version='2')
+        self.perform()
+        self.next_build(version='10')
+        with self.root_permissions():
+            self.assertTrue(install.Installer.status(self.helper)['needsUpdate'])
 
     def test_rebuilt_source_can_remove_previous_bundle(self):
         self.perform()
@@ -261,6 +302,36 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(install.Installer.status(self.helper)['ready'])
             self.helper.hosts.write_text(self.helper.hosts.read_text() + f'127.0.0.2 {install.DOMAIN}\n')
             self.assertFalse(install.Installer.status(self.helper)['ready'])
+
+    def test_repair_incomplete_configuration_of_loaded_service(self):
+        self.perform()
+        for damage in ('hosts', 'environment', 'permissions'):
+            with self.subTest(damage=damage):
+                if damage == 'hosts':
+                    self.helper.hosts.write_bytes(self.before[self.helper.hosts][0])
+                elif damage == 'environment':
+                    self.helper.env.write_text(self.helper.env.read_text().replace('HTTPS_PROXY=', 'OLD_HTTPS_PROXY='))
+                else:
+                    self.helper.env.chmod(0o644)
+                with self.root_permissions(), patch.object(self.helper, 'running', return_value=True):
+                    state = install.Installer.status(self.helper)
+                    self.assertTrue(state['installed'])
+                    self.assertFalse(state['ready'])
+                    self.assertFalse(state.get('needsUpdate', False))
+                    self.perform()
+                    self.assertTrue(install.Installer.status(self.helper)['ready'])
+                self.assertTrue(self.helper.active)
+                self.assertIn('TOKEN=private', self.helper.env.read_text())
+
+    def test_repair_stopped_service(self):
+        self.perform()
+        self.helper.active = False
+        with self.root_permissions(), patch.object(self.helper, 'running', side_effect=lambda: self.helper.active):
+            state = install.Installer.status(self.helper)
+            self.assertTrue(state['installed'])
+            self.assertFalse(state['ready'])
+            self.perform()
+            self.assertTrue(install.Installer.status(self.helper)['ready'])
 
     def test_status_validates_proxy_endpoints_independently(self):
         self.helper.env.write_text('HTTP_PROXY=http://remote.example:7890\nALL_PROXY=socks5h://[::1]:7891\n')

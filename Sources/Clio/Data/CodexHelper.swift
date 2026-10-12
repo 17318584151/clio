@@ -8,6 +8,7 @@ final class CodexHelper: ObservableObject {
     static let shared = CodexHelper()
     @Published private(set) var installed = false
     @Published private(set) var needsUpdate = false
+    @Published private(set) var needsRepair = false
     @Published private(set) var busy = false
     @Published private(set) var status = "尚未检测"
     @Published private(set) var result: String
@@ -84,15 +85,11 @@ final class CodexHelper: ObservableObject {
         }
         let uid = getuid()
         let helperPath = Self.nativeExecutable.path
-        // A read-only recheck prevents authorisation for an already installed service.
+        // Ready services need no authorisation unless an update is available.
         let current = await Task.detached {
             Self.run("/usr/bin/python3", ["-I", "-B", script.path, "status", "--uid", String(uid), "--helper-binary", helperPath])
         }.value
-        if current.installed && current.needsUpdate != true {
-            apply(current, savingResult: true)
-            return
-        }
-        if current.failed {
+        if !current.canInstall {
             apply(current, savingResult: true)
             return
         }
@@ -143,8 +140,9 @@ final class CodexHelper: ObservableObject {
         if !response.failed {
             installed = response.installed
             needsUpdate = response.needsUpdate ?? false
+            needsRepair = response.needsRepair
         }
-        status = response.installed ? "辅助服务运行中" : "辅助服务未就绪"
+        status = response.ready == true ? "辅助服务运行中" : "辅助服务未就绪"
         if savingResult { save(response.message) }
         else { status = response.message }
     }
@@ -171,7 +169,7 @@ final class CodexHelper: ObservableObject {
             .replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
-    private struct Response: Decodable, Sendable {
+    struct Response: Decodable, Sendable {
         var installed: Bool
         var message: String
         var http: String?
@@ -179,6 +177,9 @@ final class CodexHelper: ObservableObject {
         var ready: Bool?
         var needsUpdate: Bool?
         var failed: Bool = false
+
+        var needsRepair: Bool { installed && ready != true && needsUpdate != true }
+        var canInstall: Bool { !failed && (ready != true || needsUpdate == true) }
 
         enum CodingKeys: String, CodingKey { case installed, message, http, socks, ready, needsUpdate }
     }

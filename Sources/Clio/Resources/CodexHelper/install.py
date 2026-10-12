@@ -175,6 +175,10 @@ class Installer:
         return {str(path.relative_to(self.bundle)): hashlib.sha256((origin if source else path).read_bytes()).hexdigest()
                 for path, origin in self.bundle_files.items()}
 
+    def bundle_version(self, source=False):
+        bundle = self.native_source.with_name('CodexHelper.app') if source else self.bundle
+        return int(plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())['CFBundleVersion'])
+
     def recognized_bundle(self):
         for path in [self.directory, *self.bundle_directories, *self.bundle_files, self.build_record]:
             safe_path(path)
@@ -273,7 +277,7 @@ class Installer:
             program = plistlib.loads(self.plist.read_bytes())['ProgramArguments'][0]
             native = program in (str(self.program), str(self.legacy_program))
             executable = Path(program) if native else self.script
-            needs_update = installed and (program != str(self.program) or self.bundle_hashes() != self.bundle_hashes(source=True))
+            needs_update = installed and (program != str(self.program) or self.bundle_version() < self.bundle_version(source=True))
             permissions = all(stat.S_IMODE(p.stat().st_mode) == mode and p.stat().st_uid == owner
                               and (owner != 0 or p.stat().st_gid == 0)
                               for p, mode, owner in [(self.env, 0o600, self.uid), (executable, 0o755 if native else 0o644, 0),
@@ -332,12 +336,15 @@ class Installer:
         old_loaded, _ = self.loaded()
         if old_loaded and not self.compatible():
             raise InstallError('发现无法识别的已加载服务，已停止安装。')
-        upgrade_only = (old_loaded and (self.legacy_program.exists() or self.program.exists())
-                        and self.compatible() and self.service_proxy() == socks)
         original_hosts = self.hosts.read_bytes().decode('utf-8')
         new_hosts = merge_hosts(original_hosts).encode()
         original_env = self.env.read_bytes().decode('utf-8') if self.env.exists() else ''
         new_env = merge_env(original_env, http, socks).encode()
+        upgrade_only = (old_loaded and (self.legacy_program.exists() or self.program.exists())
+                        and self.compatible() and self.service_proxy() == socks
+                        and original_hosts.encode() == new_hosts and original_env.encode() == new_env
+                        and self.env.exists() and stat.S_IMODE(self.env.stat().st_mode) == 0o600
+                        and self.env.stat().st_uid == self.uid)
         paths = [self.hosts, self.env, self.script, self.legacy_program, *self.bundle_files, self.plist, self.receipt, self.build_record, self.env_backup]
         snapshots = {p: (p.read_bytes(), p.stat()) if p.exists() else None for p in paths}
         directory_stat = self.directory.stat() if self.directory.exists() else None

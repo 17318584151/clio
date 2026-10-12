@@ -40,10 +40,10 @@ struct HeatmapCard: View {
     var body: some View {
         Card(spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                CardTitle(text: "每日活跃")
+                CardTitle(text: "历史活跃")
                 Spacer()
                 Text("近 \(weeks) 周 · \(activeDays) 天有记录")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(theme.textSecondary)
             }
             .frame(height: 15)
