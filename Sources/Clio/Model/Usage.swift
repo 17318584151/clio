@@ -193,7 +193,7 @@ struct UsageSummary {
     let totals: [Granularity: TokenCounts]
     /// Tokens in the preceding period of the same length.
     let previousTotals: [Granularity: Int]
-    /// Absent for a period with any unpriced model.
+    /// Estimated cost per period; models without prices contribute zero.
     let costs: [Granularity: Double]
     let buckets: [Granularity: [Bucket]]
     let models: [Granularity: [ModelUsage]]

@@ -42,8 +42,7 @@ struct UsageCard: View {
         }
     }
 
-    /// A tool without a price on file reads as a dash, which is why the total
-    /// does; a tool that spent nothing is left out.
+    /// Tools whose estimated cost is zero are omitted from the readout.
     private var costSplit: [TipRow] {
         guard parts.count > 1 else { return [] }
         return parts.compactMap { part in
@@ -93,7 +92,7 @@ struct UsageCard: View {
                         .monospacedDigit()
                         .foregroundStyle(theme.cost)
                         .lineLimit(1)
-                        .help(cost == nil && parts.count < 2 ? "部分模型缺少价格，无法计算总花费" : "")
+                        .help("按公开单价估算，未匹配到价格的模型按 0 计入费用")
                 }
                 .fixedSize()
                 .hoverTip(costSplit, alignment: .topTrailing)
@@ -430,7 +429,6 @@ struct ModelBreakdownCard: View {
                         .monospacedDigit()
                         .foregroundStyle(basis == .cost ? theme.textPrimary : theme.textSecondary)
                         .frame(width: 56, alignment: .trailing)
-                        .help(model.cost == nil ? "未找到此模型的价格" : "")
                 }
                 .frame(height: 17)
             }
