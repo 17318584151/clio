@@ -46,4 +46,12 @@ enum PlanReader {
             return name.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
+
+    static func codexDisplayName(for plan: String) -> String? {
+        switch plan {
+        case "pro": return "Pro 20×"
+        case "prolite": return "Pro 5×"
+        default: return displayName(for: plan)
+        }
+    }
 }

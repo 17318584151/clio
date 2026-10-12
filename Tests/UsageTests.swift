@@ -211,6 +211,10 @@ enum UsageTests {
         expect(result.plan == "Pro 5×", "prolite must display as Pro 5×")
         expect(result.events.reduce(0, { $0 + $1.counts.total }) == 2200, "upgrade must retain earlier usage")
         expect(result.quota?.fiveHour == nil, "new subscription without five-hour quota must clear the old window")
+        try append(usage(-40, total: 3300, plan: "pro"), to: file)
+        expect(reader.refresh(now: now).plan == "Pro 20×", "Codex pro must display as Pro 20×")
+        let claudeConfig = Data(#"{"oauthAccount":{"organizationType":"claude_pro"}}"#.utf8)
+        expect(PlanReader.parse(claudeConfig) == "Pro", "Claude Pro must keep its own plan label")
     }
 
     private static func testCacheWrites() throws {
@@ -243,6 +247,25 @@ enum UsageTests {
         expect(present != nil, "Codex with a reported five-hour quota must show the row")
         let claude: Any? = snapshot([], tool: .claudeCode).fiveHour
         expect(claude != nil, "Claude Code must retain its five-hour row")
+
+        for tool in Tool.allCases {
+            let weekly = RateLimitWindow(usedPercentage: 42)
+            let both = RateLimitSnapshot(updatedAt: now, fiveHour: .init(usedPercentage: 20),
+                                         sevenDay: weekly, modelScoped: [])
+            let selected = snapshot([], tool: tool, limits: both)
+            expect(selected.menuBarQuota.fraction == 0.2 && selected.menuBarQuota.title == selected.fiveHour?.title,
+                   "\(tool) menu bar must prefer the five-hour quota")
+            let weekOnly = RateLimitSnapshot(updatedAt: now, sevenDay: weekly, modelScoped: [])
+            let fallback = snapshot([], tool: tool, limits: weekOnly)
+            expect(fallback.menuBarQuota.fraction == 0.42 && fallback.menuBarQuota.title == fallback.week.title,
+                   "\(tool) menu bar must fall back to weekly quota when five-hour percentage is absent")
+            let unused = RateLimitSnapshot(updatedAt: now, fiveHour: .init(usedPercentage: 0),
+                                           sevenDay: weekly, modelScoped: [])
+            expect(snapshot([], tool: tool, limits: unused).menuBarQuota.fraction == 0,
+                   "\(tool) zero usage is an available five-hour quota")
+            expect(snapshot([], tool: tool).menuBarQuota.fraction == nil,
+                   "\(tool) missing quota must remain unavailable")
+        }
     }
 
     private static func testUnknownPrices() {
