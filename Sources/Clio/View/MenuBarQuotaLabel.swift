@@ -71,8 +71,9 @@ struct MenuBarQuotaLabel: View {
 
     private func color(for remaining: Int?) -> Color {
         guard let remaining else { return foreground.opacity(0.5) }
-        if remaining < 20 { return Color(hex: 0xFF453A) }
+        if remaining <= 25 { return Color(hex: 0xFF453A) }
         if remaining <= 50 { return Color(hex: 0xFF9F0A) }
+        if remaining <= 75 { return Color(hex: 0xFFD60A) }
         return foreground
     }
 }
