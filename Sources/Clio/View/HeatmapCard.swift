@@ -5,7 +5,7 @@ struct HeatmapCard: View {
     @Environment(\.theme) private var theme
     @Environment(\.panelIsOpen) private var panelIsOpen
     var dailyTokens: [Date: Int]
-    /// Each tool on its own, split out in the readout when there are two.
+    /// Each tool's contribution to the daily readout.
     var parts: [ToolSnapshot] = []
 
     @State private var hovered: Date?
@@ -132,14 +132,12 @@ struct HeatmapCard: View {
 
     private func tipTable(_ day: Date) -> TipTable {
         let tokens = dailyTokens[day] ?? 0
-        let rows = parts.count > 1
-            ? parts.compactMap { part in
-                (part.usage.dailyTokens[day] ?? 0) > 0
-                    ? TipRow(tool: part.tool, value: Format.compact(part.usage.dailyTokens[day] ?? 0)) : nil
-            }
-            : []
+        let rows = parts.compactMap { part in
+            (part.usage.dailyTokens[day] ?? 0) > 0
+                ? TipRow(tool: part.tool, value: Format.compact(part.usage.dailyTokens[day] ?? 0)) : nil
+        }
         return TipTable(title: Self.dayLabel.string(from: day),
-                        total: tokens > 0 ? Format.compact(tokens) : "无记录",
+                        total: rows.count == 1 ? nil : (tokens > 0 ? Format.compact(tokens) : "无记录"),
                         rows: rows)
     }
 

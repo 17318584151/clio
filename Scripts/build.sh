@@ -52,6 +52,11 @@ cp "$root/Resources/Info.plist" "$app/Contents/"
 cp -R "$root/Sources/Clio/Resources/CodexHelper" "$app/Contents/Resources/"
 clang -target "$target" -isysroot "$sdk" -Wall -Wextra -Werror -O2 \
     "$root/Tools/CodexHelper/main.c" -o "$app/Contents/Resources/CodexHelper/CodexHelper"
+helper="$app/Contents/Resources/CodexHelper/CodexHelper.app"
+mkdir -p "$helper/Contents/MacOS" "$helper/Contents/Resources"
+cp "$root/Tools/CodexHelper/Info.plist" "$helper/Contents/"
+cp "$root/Resources/AppIcon.icns" "$helper/Contents/Resources/"
+cp "$app/Contents/Resources/CodexHelper/CodexHelper" "$helper/Contents/MacOS/"
 # A Developer ID signature is what lets the app open on someone else's Mac
 # without a Gatekeeper warning, and it is also what launch-at-login
 # registration needs. Without one an ad-hoc signature keeps it runnable here.
@@ -59,11 +64,13 @@ if [ -n "${CLIO_SIGN_IDENTITY:-}" ]; then
     echo "签名：$CLIO_SIGN_IDENTITY"
     codesign --force --options runtime --timestamp --sign "$CLIO_SIGN_IDENTITY" \
         "$app/Contents/Resources/CodexHelper/CodexHelper"
+    codesign --force --options runtime --timestamp --sign "$CLIO_SIGN_IDENTITY" "$helper"
     codesign --force --deep --options runtime --timestamp \
         --sign "$CLIO_SIGN_IDENTITY" "$app"
 else
     echo "签名：ad-hoc（未设置 CLIO_SIGN_IDENTITY，别的 Mac 上会被 Gatekeeper 拦下）"
     codesign --force --sign - "$app/Contents/Resources/CodexHelper/CodexHelper"
+    codesign --force --sign - "$helper"
     codesign --force --sign - "$app" >/dev/null 2>&1 || echo "跳过签名"
 fi
 

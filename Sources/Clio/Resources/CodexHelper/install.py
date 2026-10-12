@@ -21,6 +21,8 @@ BEGIN = '# BEGIN Codex backend relay'
 END = '# END Codex backend relay'
 BLOCK = f'{BEGIN}\n127.0.0.1 {DOMAIN}\n::1 {DOMAIN}\n{END}\n'
 LEGACY_HASH = '829b89207bc87684c0f03149e71fff9287ba3716bf72a8563c200a475b87c7be'
+# Native helper shipped in Clio 1.1.26 for Apple Silicon.
+LEGACY_NATIVE_HASH = 'd4247d46d53fe551372cc38d6355c06594c36dfb80b3711b5b5ef48773384f52'
 KEY = re.compile(r'^(\s*(?:export\s+)?)(HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY)\s*=')
 
 
@@ -147,12 +149,43 @@ class Installer:
         self.hosts = Path('/private/etc/hosts') if root == Path('/') else root / 'etc/hosts'
         self.directory = root / 'Library/Application Support/CodexBackendRelay'
         self.script = self.directory / 'codex-backend-relay.py'
-        self.program = self.directory / 'CodexHelper'
+        self.legacy_program = self.directory / 'CodexHelper'
+        self.bundle = self.directory / 'CodexHelper.app'
+        self.program = self.bundle / 'Contents/MacOS/CodexHelper'
         self.plist = root / f'Library/LaunchDaemons/{LABEL}.plist'
         self.source = Path(__file__).with_name('relay.py')
         self.native_source = Path(__file__).with_name('CodexHelper')
         self.receipt = self.directory / 'clio-install.json'
+        self.build_record = self.directory / 'helper-build.json'
         self.env_backup = self.directory / 'env.before-clio'
+
+    @property
+    def bundle_files(self):
+        source = self.native_source.with_name('CodexHelper.app')
+        return {self.bundle / relative: source / relative for relative in [
+            'Contents/MacOS/CodexHelper', 'Contents/Info.plist',
+            'Contents/Resources/AppIcon.icns', 'Contents/_CodeSignature/CodeResources']}
+
+    @property
+    def bundle_directories(self):
+        return [self.bundle, self.bundle / 'Contents', self.bundle / 'Contents/MacOS',
+                self.bundle / 'Contents/Resources', self.bundle / 'Contents/_CodeSignature']
+
+    def bundle_hashes(self, source=False):
+        return {str(path.relative_to(self.bundle)): hashlib.sha256((origin if source else path).read_bytes()).hexdigest()
+                for path, origin in self.bundle_files.items()}
+
+    def recognized_bundle(self):
+        for path in [self.directory, *self.bundle_directories, *self.bundle_files, self.build_record]:
+            safe_path(path)
+            info = path.stat()
+            mode = 0o755 if path.is_dir() or path == self.program else 0o644
+            if info.st_uid != 0 or info.st_gid != 0 or stat.S_IMODE(info.st_mode) != mode:
+                return False
+        record = json.loads(self.build_record.read_bytes())
+        return (record['files'] == self.bundle_hashes()
+                and self.command('/usr/bin/codesign', '--verify', '--strict', '-R',
+                                 '=identifier "com.kira.clio.codex-helper"', str(self.bundle)).returncode == 0)
 
     def command(self, *args):
         return subprocess.run(args, capture_output=True, timeout=45, check=False)
@@ -184,7 +217,7 @@ class Installer:
                               and any(isinstance(target, ast.Name) and target.id == 'PROXY' for target in node.targets))
             host, port = ast.literal_eval(assignment.value)
             return endpoint(f'socks5h://{host}:{port}', 'socks5h')[0]
-        offset = 1 if args[0] == str(self.program) else 3
+        offset = 1 if args[0] in (str(self.program), str(self.legacy_program)) else 3
         host = f'[{args[offset + 1]}]' if ':' in args[offset + 1] else args[offset + 1]
         return endpoint(f'socks5h://{host}:{args[offset + 3]}', 'socks5h')[0]
 
@@ -195,9 +228,15 @@ class Installer:
             base = ['/usr/bin/python3', '-I', str(self.script)]
             if config.get('Label') != LABEL or not config.get('KeepAlive') or not config.get('RunAtLoad'):
                 return False
-            if args[0] == str(self.program):
+            if args[0] in (str(self.program), str(self.legacy_program)):
+                program = Path(args[0])
+                if program == self.program:
+                    binary_matches = self.recognized_bundle()
+                else:
+                    digest = hashlib.sha256(program.read_bytes()).hexdigest()
+                    binary_matches = digest in (hashlib.sha256(self.native_source.read_bytes()).hexdigest(), LEGACY_NATIVE_HASH)
                 return (len(args) == 5 and args[1] == '--proxy-host' and args[3] == '--proxy-port'
-                        and hashlib.sha256(self.program.read_bytes()).digest() == hashlib.sha256(self.native_source.read_bytes()).digest()
+                        and binary_matches
                         and bool(endpoint(self.service_proxy(), 'socks5h')))
             digest = hashlib.sha256(self.script.read_bytes()).hexdigest()
             if args == base and digest == LEGACY_HASH:
@@ -213,7 +252,7 @@ class Installer:
         installed = bool(self.compatible())
         detected = {}
         try:
-            for path in [self.env, self.hosts, self.directory, self.script, self.plist, self.program]:
+            for path in [self.env, self.hosts, self.directory, self.script, self.plist, self.legacy_program, *self.bundle_files, self.build_record]:
                 safe_path(path)
             env = self.env.read_bytes().decode('utf-8') if self.env.exists() else ''
             # Export only validated loopback endpoints; no other user content leaves this process.
@@ -231,16 +270,18 @@ class Installer:
             detected_socks = detected.get('socks', '')
             expected = merge_env(env, http or detected_http, socks or detected_socks)
             hosts = self.hosts.read_bytes().decode('utf-8')
-            native = plistlib.loads(self.plist.read_bytes())['ProgramArguments'][0] == str(self.program)
-            executable = self.program if native else self.script
+            program = plistlib.loads(self.plist.read_bytes())['ProgramArguments'][0]
+            native = program in (str(self.program), str(self.legacy_program))
+            executable = Path(program) if native else self.script
+            needs_update = installed and (program != str(self.program) or self.bundle_hashes() != self.bundle_hashes(source=True))
             permissions = all(stat.S_IMODE(p.stat().st_mode) == mode and p.stat().st_uid == owner
                               and (owner != 0 or p.stat().st_gid == 0)
                               for p, mode, owner in [(self.env, 0o600, self.uid), (executable, 0o755 if native else 0o644, 0),
                                                      (self.plist, 0o644, 0), (self.directory, 0o755, 0)])
-            ready = (env == expected and BLOCK in hosts and merge_hosts(hosts) == hosts
-                     and permissions and self.compatible()
+            ready = (env == expected and BLOCK in hosts and bool(merge_hosts(hosts))
+                     and permissions and self.compatible() and not needs_update
                      and self.service_proxy() == (socks or detected_socks) and self.running())
-            return dict(installed=installed, ready=bool(ready), message='已安装，IPv4 / IPv6 转发服务正在运行。' if ready
+            return dict(installed=installed, ready=bool(ready), needsUpdate=needs_update, message='辅助服务可更新。' if needs_update else '已安装，IPv4 / IPv6 转发服务正在运行。' if ready
                         else '配置不完整或服务未运行，可安装或修复。', **detected)
         except (OSError, ValueError, KeyError, IndexError, TypeError, InstallError):
             return dict(installed=installed, ready=False, message='已安装，配置不完整或服务未运行。' if installed else '未安装。', **detected)
@@ -274,7 +315,7 @@ class Installer:
     def install(self, http, socks):
         http, http_address = endpoint(http, 'http')
         socks, socks_address = endpoint(socks, 'socks5h')
-        for path in [self.env, self.hosts, self.directory, self.script, self.program, self.plist, self.receipt, self.env_backup]:
+        for path in [self.env, self.hosts, self.directory, self.script, self.legacy_program, *self.bundle_files, self.plist, self.receipt, self.build_record, self.env_backup]:
             safe_path(path)
         if self.env.parent.exists() and self.env.parent.stat().st_uid != self.uid:
             raise InstallError('Codex 配置目录不属于当前用户，已停止安装。')
@@ -286,16 +327,18 @@ class Installer:
                     pass
             except OSError:
                 raise InstallError('本机代理端口无法连接，安装未开始。')
-        if (self.script.exists() or self.program.exists() or self.plist.exists()) and not self.compatible():
+        if (self.script.exists() or self.legacy_program.exists() or self.bundle.exists() or self.plist.exists()) and not self.compatible():
             raise InstallError('发现无法识别的同名服务，已保留现有配置并停止安装。')
         old_loaded, _ = self.loaded()
         if old_loaded and not self.compatible():
             raise InstallError('发现无法识别的已加载服务，已停止安装。')
+        upgrade_only = (old_loaded and (self.legacy_program.exists() or self.program.exists())
+                        and self.compatible() and self.service_proxy() == socks)
         original_hosts = self.hosts.read_bytes().decode('utf-8')
         new_hosts = merge_hosts(original_hosts).encode()
         original_env = self.env.read_bytes().decode('utf-8') if self.env.exists() else ''
         new_env = merge_env(original_env, http, socks).encode()
-        paths = [self.hosts, self.env, self.script, self.program, self.plist, self.receipt, self.env_backup]
+        paths = [self.hosts, self.env, self.script, self.legacy_program, *self.bundle_files, self.plist, self.receipt, self.build_record, self.env_backup]
         snapshots = {p: (p.read_bytes(), p.stat()) if p.exists() else None for p in paths}
         directory_stat = self.directory.stat() if self.directory.exists() else None
         created = []
@@ -303,7 +346,8 @@ class Installer:
         changed = False
         try:
             for path, mode, uid, gid in [(self.env.parent, 0o700, self.uid, self.gid),
-                                         (self.directory, 0o755, 0, 0)]:
+                                         (self.directory, 0o755, 0, 0),
+                                         *((path, 0o755, 0, 0) for path in self.bundle_directories)]:
                 if not path.exists():
                     path.mkdir(mode=mode)
                     os.chown(path, uid, gid)
@@ -312,7 +356,15 @@ class Installer:
                 if self.command('/bin/launchctl', 'bootout', f'system/{LABEL}').returncode:
                     raise InstallError('停止已有服务失败。')
                 changed = True
-            self.check_ports()
+            attempts = 20 if old_loaded else 1
+            for attempt in range(attempts):
+                try:
+                    self.check_ports()
+                    break
+                except InstallError:
+                    if attempt == attempts - 1:
+                        raise
+                    time.sleep(0.1)
             backup = self.directory / f'hosts.before-{time.time_ns()}'
             atomic_write(backup, snapshots[self.hosts][0], 0o600, 0, 0)
             config = dict(Label=LABEL, ProgramArguments=[str(self.program),
@@ -332,17 +384,21 @@ class Installer:
                     raise InstallError('该辅助服务由其他用户安装，已停止操作。')
                 receipt['env_existed'] = previous['env_existed']
             atomic_write(self.receipt, json.dumps(receipt).encode(), 0o600, 0, 0)
-            atomic_write(self.program, self.native_source.read_bytes(), 0o755, 0, 0)
+            for path, source in self.bundle_files.items():
+                atomic_write(path, source.read_bytes(), 0o755 if path == self.program else 0o644, 0, 0)
+            atomic_write(self.build_record, json.dumps(dict(files=self.bundle_hashes())).encode(), 0o644, 0, 0)
             atomic_write(self.plist, plistlib.dumps(config), 0o644, 0, 0)
             if self.command('/bin/launchctl', 'bootstrap', 'system', str(self.plist)).returncode:
                 raise InstallError('注册后台服务失败。')
             time.sleep(1)
             self.verify()
-            atomic_write(self.env, new_env, 0o600, self.uid, self.gid)
-            hosts_stat = snapshots[self.hosts][1]
-            atomic_write(self.hosts, new_hosts, stat.S_IMODE(hosts_stat.st_mode), hosts_stat.st_uid, hosts_stat.st_gid)
-            self.flush()
+            if not upgrade_only:
+                atomic_write(self.env, new_env, 0o600, self.uid, self.gid)
+                hosts_stat = snapshots[self.hosts][1]
+                atomic_write(self.hosts, new_hosts, stat.S_IMODE(hosts_stat.st_mode), hosts_stat.st_uid, hosts_stat.st_gid)
+                self.flush()
             self.script.unlink(missing_ok=True)
+            self.legacy_program.unlink(missing_ok=True)
             return '已安装。'
         except Exception as error:
             failures = []
@@ -392,9 +448,9 @@ class Installer:
             raise InstallError(detail + ('恢复未完成：' + '、'.join(failures) if failures else '本次变更已撤销。'))
 
     def remove(self):
-        for path in [self.env, self.hosts, self.directory, self.script, self.program, self.plist, self.receipt, self.env_backup]:
+        for path in [self.env, self.hosts, self.directory, self.script, self.legacy_program, *self.bundle_files, self.plist, self.receipt, self.build_record, self.env_backup]:
             safe_path(path)
-        if not self.script.exists() and not self.program.exists() and not self.plist.exists() and not self.loaded()[0]:
+        if not self.script.exists() and not self.legacy_program.exists() and not self.bundle.exists() and not self.plist.exists() and not self.loaded()[0]:
             return '已移除。'
         if not self.compatible():
             raise InstallError('无法识别现有辅助服务，已停止移除。')
@@ -411,7 +467,7 @@ class Installer:
             restored = current
             remove_empty_env = False
         hosts = merge_hosts(self.hosts.read_bytes().decode('utf-8'), removing=True).encode()
-        paths = [self.hosts, self.env, self.script, self.program, self.plist, self.receipt, self.env_backup]
+        paths = [self.hosts, self.env, self.script, self.legacy_program, *self.bundle_files, self.plist, self.receipt, self.build_record, self.env_backup]
         snapshots = {p: (p.read_bytes(), p.stat()) if p.exists() else None for p in paths}
         was_loaded, _ = self.loaded()
         try:
@@ -425,8 +481,13 @@ class Installer:
                 else:
                     atomic_write(self.env, restored.encode(), 0o600, self.uid, self.gid)
             self.flush()
-            for path in [self.script, self.program, self.plist, self.receipt, self.env_backup]:
+            for path in [self.script, self.legacy_program, *self.bundle_files, self.plist, self.receipt, self.build_record, self.env_backup]:
                 path.unlink(missing_ok=True)
+            for path in reversed(self.bundle_directories):
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
             return '已移除。'
         except Exception as error:
             failures = []

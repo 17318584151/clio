@@ -207,7 +207,7 @@ private struct UsageChart: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var buckets: [Bucket]
     var granularity: Granularity
-    /// Stacked bottom-up in this order, each in its own color, when there are two.
+    /// Stacked bottom-up in this order, each in its own color.
     var tools: [Tool]
 
     @State private var hovered: Int?
@@ -225,22 +225,6 @@ private struct UsageChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if tools.count > 1 {
-                HStack(spacing: 10) {
-                    ForEach(tools) { tool in
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(theme.series(tool))
-                                .frame(width: 6, height: 6)
-                            Text(tool.displayName)
-                        }
-                    }
-                }
-                .font(.system(size: 10))
-                .foregroundStyle(theme.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .frame(height: 12)
-            }
             ZStack(alignment: .topLeading) {
                 // Guides sit at fixed offsets in the 48pt plot, as drawn.
                 ForEach([12.0, 24.0, 36.0], id: \.self) { offset in
@@ -253,9 +237,7 @@ private struct UsageChart: View {
                 // bar from the height it had.
                 HStack(alignment: .bottom, spacing: spacing) {
                     ForEach(Array(buckets.enumerated()), id: \.offset) { index, bucket in
-                        StackedBar(shares: tools.count > 1
-                                       ? tools.map { (theme.series($0), bucket.byTool[$0] ?? 0) }
-                                       : [(theme.accent, bucket.tokens)],
+                        StackedBar(shares: tools.map { (theme.series($0), bucket.byTool[$0] ?? 0) },
                                    height: max(0, 48 * CGFloat(bucket.tokens) / CGFloat(peak)))
                             .opacity(hovered == nil || hovered == index ? 1 : 0.4)
                             .frame(maxWidth: .infinity)
@@ -316,13 +298,12 @@ private struct UsageChart: View {
     }
 
     private func tipTable(_ bucket: Bucket) -> TipTable {
-        let rows = tools.count > 1
-            ? tools.compactMap { tool in
-                (bucket.byTool[tool] ?? 0) > 0
-                    ? TipRow(tool: tool, value: Format.compact(bucket.byTool[tool] ?? 0)) : nil
-            }
-            : []
-        return TipTable(title: tipTitle(bucket), total: Format.compact(bucket.tokens), rows: rows)
+        let rows = tools.compactMap { tool in
+            (bucket.byTool[tool] ?? 0) > 0
+                ? TipRow(tool: tool, value: Format.compact(bucket.byTool[tool] ?? 0)) : nil
+        }
+        return TipTable(title: tipTitle(bucket),
+                        total: rows.count == 1 ? nil : Format.compact(bucket.tokens), rows: rows)
     }
 
     /// The axis is terse by design; the readout spells the period out.

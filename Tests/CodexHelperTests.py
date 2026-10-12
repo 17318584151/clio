@@ -1,8 +1,11 @@
 import importlib.util
+import hashlib
+import json
 import os
 from pathlib import Path
 import plistlib
 import socket
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -34,6 +37,8 @@ class FakeInstaller(install.Installer):
 
     def command(self, *args):
         self.calls.append(args)
+        if args[0] == '/usr/bin/codesign':
+            return subprocess.run(args, capture_output=True, check=False)
         if 'bootout' in args:
             self.active = False
         if 'bootstrap' in args:
@@ -91,6 +96,25 @@ class InstallerTests(unittest.TestCase):
         return self.helper.install(f'http://127.0.0.1:{self.http.getsockname()[1]}',
                                    f'socks5h://127.0.0.1:{self.socks.getsockname()[1]}')
 
+    def root_permissions(self):
+        original_stat = Path.stat
+        def owned_stat(path, *args, **kwargs):
+            info = list(original_stat(path, *args, **kwargs))
+            info[4] = self.helper.uid if path in (self.helper.env, self.helper.env.parent) else 0
+            info[5] = 0
+            return os.stat_result(info)
+        return patch.object(Path, 'stat', owned_stat)
+
+    def next_build(self):
+        folder = self.root / 'next-build'
+        folder.mkdir()
+        shutil.copy2(self.helper.native_source, folder / 'CodexHelper')
+        bundle = folder / 'CodexHelper.app'
+        shutil.copytree(self.helper.native_source.with_name('CodexHelper.app'), bundle)
+        subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--options', 'runtime', str(bundle)],
+                       capture_output=True, check=True)
+        self.helper.native_source = folder / 'CodexHelper'
+
     def assert_restored(self):
         for path, (data, mode) in self.before.items():
             self.assertEqual(path.read_bytes(), data)
@@ -105,6 +129,14 @@ class InstallerTests(unittest.TestCase):
         self.assertIn(f'HTTP_PROXY=http://127.0.0.1:{self.http.getsockname()[1]}', self.helper.env.read_text())
         self.assertIn(f'ALL_PROXY=socks5h://127.0.0.1:{self.socks.getsockname()[1]}', self.helper.env.read_text())
         arguments = plistlib.loads(self.helper.plist.read_bytes())['ProgramArguments']
+        self.assertEqual(arguments[0], str(self.helper.program))
+        for path, source in self.helper.bundle_files.items():
+            self.assertEqual(path.read_bytes(), source.read_bytes())
+        info = plistlib.loads((self.helper.bundle / 'Contents/Info.plist').read_bytes())
+        self.assertEqual(info['CFBundleIconFile'], 'AppIcon')
+        self.assertTrue(info['LSBackgroundOnly'])
+        self.assertEqual((self.helper.bundle / 'Contents/Resources/AppIcon.icns').read_bytes(),
+                         (RESOURCES.parents[3] / 'Resources/AppIcon.icns').read_bytes())
         self.assertEqual(arguments[-2:], ['--proxy-port', str(self.socks.getsockname()[1])])
         self.assertEqual(list(self.helper.directory.glob('hosts.before-*'))[0].read_bytes(), self.before[self.helper.hosts][0])
         self.helper.ready = True
@@ -120,6 +152,115 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(status['http'], 'http://127.0.0.1:7890')
         self.assertEqual(status['socks'], 'socks5h://127.0.0.1:7891')
         self.assertNotIn('private', str(status))
+
+    def legacy_installation(self):
+        self.helper.directory.mkdir()
+        self.helper.legacy_program.write_bytes(self.helper.native_source.read_bytes())
+        self.helper.plist.write_bytes(plistlib.dumps(dict(Label=install.LABEL,
+            ProgramArguments=[str(self.helper.legacy_program), '--proxy-host', '127.0.0.1',
+                              '--proxy-port', str(self.socks.getsockname()[1])],
+            KeepAlive=True, RunAtLoad=True)))
+        self.helper.active = True
+
+    def test_legacy_native_service_upgrades_to_icon_bundle(self):
+        self.legacy_installation()
+        before = {path: path.read_bytes() for path in [self.helper.env, self.helper.hosts]}
+        with self.root_permissions(), patch.object(self.helper, 'compatible', side_effect=lambda: install.Installer.compatible(self.helper)):
+            self.assertTrue(self.helper.compatible())
+            self.assertTrue(install.Installer.status(self.helper)['needsUpdate'])
+            self.perform()
+            self.assertTrue(self.helper.compatible())
+            self.assertFalse(self.helper.legacy_program.exists())
+            self.assertFalse(install.Installer.status(self.helper)['needsUpdate'])
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data)
+
+    def test_failed_bundle_upgrade_restores_legacy_service(self):
+        self.legacy_installation()
+        before = {path: path.read_bytes() for path in [self.helper.legacy_program, self.helper.plist]}
+        self.helper.fail_at = 'verify'
+        with self.assertRaisesRegex(install.InstallError, '本次变更已撤销'):
+            self.perform()
+        self.assertTrue(self.helper.active)
+        self.assertFalse(self.helper.bundle.exists())
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data)
+
+    def test_upgrade_waits_for_old_listener_to_release_port(self):
+        self.legacy_installation()
+        with patch.object(self.helper, 'check_ports', side_effect=[install.InstallError('端口占用。'), None]) as check:
+            self.perform()
+        self.assertEqual(check.call_count, 2)
+        self.assertTrue(self.helper.active)
+        self.assertFalse(self.helper.legacy_program.exists())
+
+    def test_known_legacy_build_is_recognized_and_modified_binary_is_rejected(self):
+        self.legacy_installation()
+        binary = b'known legacy build'
+        self.helper.legacy_program.write_bytes(binary)
+        with patch.object(install, 'LEGACY_NATIVE_HASH', hashlib.sha256(binary).hexdigest()):
+            self.assertTrue(install.Installer.compatible(self.helper))
+            self.helper.legacy_program.write_bytes(binary + b'modified')
+            self.assertFalse(install.Installer.compatible(self.helper))
+
+    def test_rebuilt_source_recognizes_and_upgrades_installed_bundle(self):
+        self.perform()
+        previous = self.helper.bundle_hashes()
+        before = {path: path.read_bytes() for path in [self.helper.env, self.helper.hosts]}
+        self.next_build()
+        self.assertNotEqual(previous, self.helper.bundle_hashes(source=True))
+        with self.root_permissions(), patch.object(self.helper, 'compatible', side_effect=lambda: install.Installer.compatible(self.helper)):
+            self.assertTrue(self.helper.compatible())
+            self.assertTrue(install.Installer.status(self.helper)['needsUpdate'])
+            self.perform()
+            self.assertTrue(self.helper.compatible())
+            self.assertFalse(install.Installer.status(self.helper)['needsUpdate'])
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data)
+
+    def test_rebuilt_source_can_remove_previous_bundle(self):
+        self.perform()
+        self.next_build()
+        with self.root_permissions(), patch.object(self.helper, 'compatible', side_effect=lambda: install.Installer.compatible(self.helper)):
+            self.assertEqual(self.helper.remove(), '已移除。')
+        self.assertFalse(self.helper.bundle.exists())
+        self.assertFalse(self.helper.build_record.exists())
+        for path, (data, _) in self.before.items():
+            self.assertEqual(path.read_bytes(), data)
+
+    def test_modified_installed_binary_is_rejected(self):
+        self.perform()
+        self.helper.program.write_bytes(self.helper.program.read_bytes() + b'modified')
+        with self.root_permissions():
+            self.assertFalse(install.Installer.compatible(self.helper))
+
+    def test_writable_build_record_is_rejected(self):
+        self.perform()
+        self.helper.build_record.chmod(0o666)
+        with self.root_permissions():
+            self.assertFalse(install.Installer.compatible(self.helper))
+
+    def test_wrong_signed_bundle_identifier_is_rejected(self):
+        self.perform()
+        subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', 'other.helper',
+                        str(self.helper.bundle)], capture_output=True, check=True)
+        self.helper.build_record.write_text(json.dumps(dict(files=self.helper.bundle_hashes())))
+        with self.root_permissions():
+            self.assertFalse(install.Installer.compatible(self.helper))
+
+    def test_status_accepts_hosts_entries_after_managed_block_and_rejects_conflicts(self):
+        self.perform()
+        self.helper.hosts.write_text(self.helper.hosts.read_text() + '127.0.0.2 other.local\n')
+        original_stat = Path.stat
+        def owned_stat(path, *args, **kwargs):
+            info = list(original_stat(path, *args, **kwargs))
+            info[4] = self.helper.uid if path == self.helper.env else 0
+            info[5] = 0
+            return os.stat_result(info)
+        with patch.object(Path, 'stat', owned_stat), patch.object(self.helper, 'running', return_value=True):
+            self.assertTrue(install.Installer.status(self.helper)['ready'])
+            self.helper.hosts.write_text(self.helper.hosts.read_text() + f'127.0.0.2 {install.DOMAIN}\n')
+            self.assertFalse(install.Installer.status(self.helper)['ready'])
 
     def test_status_validates_proxy_endpoints_independently(self):
         self.helper.env.write_text('HTTP_PROXY=http://remote.example:7890\nALL_PROXY=socks5h://[::1]:7891\n')
@@ -157,6 +298,7 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(self.helper.script.exists())
         self.assertFalse(self.helper.plist.exists())
         self.assertFalse(self.helper.active)
+        self.assertFalse(self.helper.bundle.exists())
         self.assertEqual(self.helper.remove(), '已移除。')
 
     def test_remove_preserves_modified_proxy(self):
@@ -320,7 +462,8 @@ class RelayTests(unittest.TestCase):
         with socket.socket() as reservation:
             reservation.bind(('127.0.0.1', 0))
             port = reservation.getsockname()[1]
-        process = subprocess.Popen([os.environ['CLIO_HELPER_BINARY'], '--proxy-host', '127.0.0.1',
+        executable = Path(os.environ['CLIO_HELPER_BINARY']).with_name('CodexHelper.app') / 'Contents/MacOS/CodexHelper'
+        process = subprocess.Popen([str(executable), '--proxy-host', '127.0.0.1',
                                     '--proxy-port', str(proxy.getsockname()[1]), '--port', str(port)],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:

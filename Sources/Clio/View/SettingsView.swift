@@ -242,6 +242,11 @@ struct SettingsContent: View {
 
     private var codexHelperOption: some View {
         row("CodexHelper", detail: codexHelper.result.isEmpty ? codexHelper.status : codexHelper.result) {
+            if codexHelper.needsUpdate {
+                Button("更新") { Task { await codexHelper.install() } }
+                    .controlSize(.small)
+                    .disabled(codexHelper.busy)
+            }
             Button(codexHelper.busy ? "正在处理…" : (codexHelper.installed ? "移除" : "安装")) {
                 Task {
                     if codexHelper.installed { await codexHelper.remove() }

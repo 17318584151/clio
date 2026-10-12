@@ -1,8 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// The popover. Usage is shown for every tool together; the subscription card
-/// lists each account's quota.
+/// The popover, showing subscription quotas and combined or per-tool usage.
 struct PanelView: View {
     var onOpenSettings: () -> Void
     var initialGranularity: Granularity = .day
@@ -82,13 +81,16 @@ struct PanelView: View {
 
     @ViewBuilder
     private func content(_ dashboard: Dashboard) -> some View {
+        let scope = dashboard.snapshots.count > 1 ? prefs.usageScope : .combined
+        let parts = dashboard.snapshots.filter { scope.tool == nil || $0.tool == scope.tool }
+        let usage = scope == .combined ? dashboard.combined : parts.first?.usage ?? .empty
         VStack(spacing: 10) {
             VStack(spacing: 10) {
                 SubscriptionCard(snapshots: dashboard.snapshots)
-                UsageCard(usage: dashboard.combined, parts: dashboard.snapshots,
+                UsageCard(usage: usage, parts: parts,
                           granularity: $granularity, basis: $basis)
-                ActivityCards(activity: dashboard.combined.activity, parts: dashboard.snapshots)
-                HeatmapCard(dailyTokens: dashboard.combined.dailyTokens, parts: dashboard.snapshots)
+                ActivityCards(activity: usage.activity, parts: parts)
+                HeatmapCard(dailyTokens: usage.dailyTokens, parts: parts)
             }
             .padding(.horizontal, 12)
             footer(dashboard.updatedAt)
@@ -144,6 +146,16 @@ struct PanelView: View {
                     .fixedSize()
             }
             Spacer()
+            if store.dashboard.snapshots.count > 1 {
+                IconMenu(symbol: "square.stack.3d.up",
+                         tint: prefs.usageScope.tool.map { theme.series($0) } ?? theme.textPrimary,
+                         tool: prefs.usageScope.tool, action: {
+                    prefs.usageScope = prefs.usageScope.next
+                })
+                .frame(width: 22, height: 22)
+                .help("当前：\(prefs.usageScope.title)用量；点击切换至\(prefs.usageScope.next.title)")
+                .accessibilityLabel("用量范围：\(prefs.usageScope.title)")
+            }
             IconMenu(symbol: prefs.appearance.symbol, tint: theme.textPrimary, action: {
                 prefs.appearance = switch prefs.appearance {
                 case .system: .light

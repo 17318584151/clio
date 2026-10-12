@@ -31,6 +31,36 @@ enum Tool: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+enum UsageScope: String, CaseIterable {
+    case combined
+    case claudeCode
+    case codex
+
+    var next: UsageScope {
+        switch self {
+        case .combined: return .claudeCode
+        case .claudeCode: return .codex
+        case .codex: return .combined
+        }
+    }
+
+    var tool: Tool? {
+        switch self {
+        case .combined: return nil
+        case .claudeCode: return .claudeCode
+        case .codex: return .codex
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .combined: return "合并"
+        case .claudeCode: return "Claude"
+        case .codex: return "Codex"
+        }
+    }
+}
+
 /// Token counts for one assistant response. Cache writes are split by TTL
 /// because the two tiers are priced differently (1.25x vs 2x base input).
 struct TokenCounts: Equatable {

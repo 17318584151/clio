@@ -7,6 +7,7 @@ import Darwin
 final class CodexHelper: ObservableObject {
     static let shared = CodexHelper()
     @Published private(set) var installed = false
+    @Published private(set) var needsUpdate = false
     @Published private(set) var busy = false
     @Published private(set) var status = "尚未检测"
     @Published private(set) var result: String
@@ -87,7 +88,7 @@ final class CodexHelper: ObservableObject {
         let current = await Task.detached {
             Self.run("/usr/bin/python3", ["-I", "-B", script.path, "status", "--uid", String(uid), "--helper-binary", helperPath])
         }.value
-        if current.installed {
+        if current.installed && current.needsUpdate != true {
             apply(current, savingResult: true)
             return
         }
@@ -139,7 +140,10 @@ final class CodexHelper: ObservableObject {
     }
 
     private func apply(_ response: Response, savingResult: Bool) {
-        if !response.failed { installed = response.installed }
+        if !response.failed {
+            installed = response.installed
+            needsUpdate = response.needsUpdate ?? false
+        }
         status = response.installed ? "辅助服务运行中" : "辅助服务未就绪"
         if savingResult { save(response.message) }
         else { status = response.message }
@@ -173,9 +177,10 @@ final class CodexHelper: ObservableObject {
         var http: String?
         var socks: String?
         var ready: Bool?
+        var needsUpdate: Bool?
         var failed: Bool = false
 
-        enum CodingKeys: String, CodingKey { case installed, message, http, socks, ready }
+        enum CodingKeys: String, CodingKey { case installed, message, http, socks, ready, needsUpdate }
     }
 
     nonisolated private static func run(_ executable: String, _ arguments: [String]) -> Response {
