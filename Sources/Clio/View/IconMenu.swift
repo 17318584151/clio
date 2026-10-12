@@ -21,6 +21,7 @@ struct IconMenu: View {
 
     var symbol: String
     var tint: Color
+    var tool: Tool? = nil
     var items: [Item] = []
     var action: (() -> Void)? = nil
 
@@ -32,9 +33,15 @@ struct IconMenu: View {
 
     var body: some View {
         let shape = glass ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        Image(systemName: symbol)
-            .font(.system(size: 13))
-            .foregroundStyle(tint)
+        Group {
+            if let tool {
+                BrandIcon(tool: tool, size: 13, color: tint)
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: 13))
+                    .foregroundStyle(tint)
+            }
+        }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(isHovered ? theme.segmentedFill : .clear, in: shape)
             .liquidGlass(glass, in: shape)

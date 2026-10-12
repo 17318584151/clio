@@ -31,10 +31,9 @@ struct PriceTable: Codable, Equatable {
             .value
     }
 
-    /// Dollars for one set of token counts, or nil when the model has no price
-    /// on file — the UI shows a dash rather than a wrong number.
+    /// Dollars for one set of token counts. Models without a price contribute zero.
     func cost(_ counts: TokenCounts, model: String) -> Double? {
-        guard let p = price(for: model) else { return nil }
+        guard let p = price(for: model) else { return 0 }
         let m = 1_000_000.0
         return Double(counts.input) / m * p.input
             + Double(counts.output) / m * p.output

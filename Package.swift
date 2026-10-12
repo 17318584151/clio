@@ -17,6 +17,6 @@ let package = Package(
             path: "Sources/Clio",
             resources: [.copy("Resources/CodexHelper"), .copy("Resources/Zstandard-LICENSE.txt")]
         ),
-        .executableTarget(name: "CodexHelper", path: "Tools/CodexHelper"),
+        .executableTarget(name: "CodexHelper", path: "Tools/CodexHelper", exclude: ["Info.plist"]),
     ]
 )

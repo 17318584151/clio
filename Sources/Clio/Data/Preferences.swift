@@ -68,6 +68,7 @@ final class Preferences: ObservableObject {
     /// How often Claude Code is asked for the quota state in the background.
     @Published var quotaInterval: TimeInterval { didSet { defaults.set(quotaInterval, forKey: "quotaInterval") } }
     @Published var menuBarDisplay: MenuBarDisplay { didSet { defaults.set(menuBarDisplay.rawValue, forKey: "menuBarDisplay") } }
+    @Published var usageScope: UsageScope { didSet { defaults.set(usageScope.rawValue, forKey: "usageScope") } }
     @Published var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: "appearance") } }
     @Published var autoCheckUpdates: Bool { didSet { defaults.set(autoCheckUpdates, forKey: "autoCheckUpdates") } }
     /// Applies only while `autoCheckUpdates` is on.
@@ -89,6 +90,7 @@ final class Preferences: ObservableObject {
             "refreshInterval": 30.0,
             "quotaInterval": 1800.0,
             "menuBarDisplay": MenuBarDisplay.iconAndTodayTokens.rawValue,
+            "usageScope": UsageScope.combined.rawValue,
             "appearance": Appearance.system.rawValue,
             "autoCheckUpdates": true,
             "autoInstallUpdates": true,
@@ -97,6 +99,7 @@ final class Preferences: ObservableObject {
         refreshInterval = defaults.double(forKey: "refreshInterval")
         quotaInterval = defaults.double(forKey: "quotaInterval")
         menuBarDisplay = MenuBarDisplay(rawValue: defaults.string(forKey: "menuBarDisplay") ?? "") ?? .iconAndTodayTokens
+        usageScope = UsageScope(rawValue: defaults.string(forKey: "usageScope") ?? "") ?? .combined
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
         autoInstallUpdates = defaults.bool(forKey: "autoInstallUpdates")

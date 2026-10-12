@@ -19,17 +19,20 @@ enum Snapshot {
             exit(0)
         }
 
-        let store = UsageStore()
+        let sampleOnly = CommandLine.arguments.contains("--sample-only")
+        let store = sampleOnly ? UsageStore.preview(DesignSample.dashboard()) : UsageStore()
         let prefs = Preferences.shared
 
         Task {
-            await PriceService.shared.refreshIfNeeded()
-            await store.refresh()
-            // The quota probe answers after the first build; wait for it so the
-            // rendered panel carries percentages rather than bare token counts.
-            store.probeNow()
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
-            await CodexHelper.shared.refresh()
+            if !sampleOnly {
+                await PriceService.shared.refreshIfNeeded()
+                await store.refresh()
+                // The quota probe answers after the first build; wait for it so the
+                // rendered panel carries percentages rather than bare token counts.
+                store.probeNow()
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                await CodexHelper.shared.refresh()
+            }
 
             for scheme in [ColorScheme.light, .dark] {
                 let name = scheme == .light ? "light" : "dark"
@@ -69,7 +72,7 @@ enum Snapshot {
                     for scheme in [ColorScheme.light, .dark] {
                         let name = scheme == .light ? "light" : "dark"
                         write(UsageCard(usage: store.dashboard.combined, parts: store.dashboard.snapshots,
-                                        granularity: .constant(period), basis: .constant(.tokens))
+                                        granularity: .constant(period))
                                 .frame(width: Metrics.panelWidth - 24)
                                 .padding(12)
                                 .environment(\.theme, Theme.resolve(scheme))
@@ -89,6 +92,17 @@ enum Snapshot {
                         .background(backdrop(scheme)),
                       to: folder.appending(path: "sample-\(name).png"))
             }
+
+            let sample = DesignSample.dashboard()
+            write(ModelBreakdownCard(usage: sample.combined, granularity: .day,
+                                     basis: .constant(.tokens))
+                    .frame(width: Metrics.panelWidth - 24)
+                    .environment(\.theme, Theme.light),
+                  to: folder.appending(path: "models.png"))
+            write(HeatmapCard(dailyTokens: sample.combined.dailyTokens, parts: sample.snapshots)
+                    .frame(width: Metrics.panelWidth - 24)
+                    .environment(\.theme, Theme.light),
+                  to: folder.appending(path: "heatmap.png"))
 
             write(menuBarStrip(), to: folder.appending(path: "menubar.png"))
             write(quotaMenuBarStrip(), to: folder.appending(path: "menubar-quota.png"))

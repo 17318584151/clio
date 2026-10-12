@@ -18,6 +18,7 @@ enum UsageTests {
         try testCompressedLogs()
         testQuotaVisibility()
         testUnknownPrices()
+        testMonthlyUnknownModel()
         testZeroPrice()
         testAutoReviewPrice()
         testCombinedUsage()
@@ -30,7 +31,7 @@ enum UsageTests {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("17 usage regression scenarios passed")
+        print("18 usage regression scenarios passed")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -275,11 +276,25 @@ enum UsageTests {
         }
         let result = snapshot(events).usage
         let unknown: Double? = result.models[.day]?.first { $0.model == "codex-auto-review" }?.cost
-        expect(unknown == nil, "missing model prices must remain unknown")
-        expect(result.costs[.day] == nil, "an incomplete total cost must remain unknown")
+        expect(unknown == 0, "models without prices must contribute zero cost")
+        expect(result.costs[.day] == 0.002, "unknown models must not hide known costs")
         expect(result.totals[.day]?.total == 2000, "unpriced model tokens must still be counted")
         expect(result.models[.day]?.first { $0.model == "gpt-priced" }?.cost == 0.002,
                "known model costs must remain visible")
+    }
+
+    private static func testMonthlyUnknownModel() {
+        let monthStart = DashboardBuilder.range(for: .month, containing: now, calendar: .current).lowerBound
+        let unknown = UsageEvent(timestamp: monthStart, model: "codex",
+                                 counts: .init(reportedTotal: 7_212_919), dedupeKey: "monthly-unknown")
+        let known = UsageEvent(timestamp: now, model: "gpt-priced",
+                               counts: .init(input: 1000), dedupeKey: "monthly-known")
+        let result = snapshot([unknown, known]).usage
+        expect(result.costs[.month] == 0.002, "monthly costs must include priced models despite historical unknown models")
+        expect(result.totals[.month]?.total == 7_213_919, "unknown model totals must remain counted")
+        expect(result.models[.month]?.first { $0.model == "codex" }?.cost == 0,
+               "unknown historical model rows must show zero cost")
+        expect(snapshot([unknown]).usage.costs[.month] == 0, "periods with only unknown prices must show zero")
     }
 
     private static func testZeroPrice() {
@@ -321,7 +336,8 @@ enum UsageTests {
         expect(combined.totals[.day]?.input == 4500, "combined token kinds must add both tools")
         expect(combined.previousTotals[.day] == 1000, "combined previous day must add both tools")
         expect(abs(combined.tokenTrend(.day) - 3.5) < 1e-9, "combined trend must compare combined totals")
-        expect(combined.costs[.day] == nil, "an unpriced model in either tool must leave the combined cost unknown")
+        expect(combined.costs[.day] == (claude.costs[.day] ?? 0) + (codex.costs[.day] ?? 0),
+               "unpriced models must not hide the combined cost")
         let hour = Calendar.current.component(.hour, from: noon)
         let bar = combined.buckets[.day]?[hour]
         expect(bar?.byTool[.claudeCode] == 3000 && bar?.byTool[.codex] == 1500 && bar?.tokens == 4500,

@@ -1,12 +1,6 @@
 import SwiftUI
 
-/// Token total, spend, the input/output/cache split, the period chart, and the
-/// per-model breakdown — the design keeps all of it in one card.
-///
-/// Row heights are pinned to the values measured off the design canvas.
-/// SwiftUI's default line heights run 1–5pt tighter than the browser's
-/// `line-height: normal`, and left free the difference accumulates down the
-/// panel.
+/// Usage totals and trends for the selected period.
 struct UsageCard: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -15,7 +9,6 @@ struct UsageCard: View {
     /// Each tool on its own, split out beneath the total when there are two.
     var parts: [ToolSnapshot]
     @Binding var granularity: Granularity
-    @Binding var basis: ShareBasis
     /// The trend badge sits against the headline, whose width steps as the
     /// count passes a digit; the badge stays hidden until that width is final.
     @State private var isTrendShown = true
@@ -49,8 +42,7 @@ struct UsageCard: View {
         }
     }
 
-    /// A tool without a price on file reads as a dash, which is why the total
-    /// does; a tool that spent nothing is left out.
+    /// Tools whose estimated cost is zero are omitted from the readout.
     private var costSplit: [TipRow] {
         guard parts.count > 1 else { return [] }
         return parts.compactMap { part in
@@ -59,31 +51,12 @@ struct UsageCard: View {
         }
     }
 
-    /// Models in the order they take colors: by this month's tokens, then by
-    /// the week's, the day's, and the recent periods for any the month lacks.
-    /// A model keeps its color across periods and bases.
-    private var modelOrder: [String] {
-        var order: [String] = []
-        for granularity in [Granularity.month, .week, .day, .recentMonth, .recentWeek] {
-            for model in usage.models[granularity] ?? [] where !order.contains(model.model) {
-                order.append(model.model)
-            }
-        }
-        return order
-    }
-
     var body: some View {
         Card {
-            HStack(spacing: 8) {
-                CardTitle(text: "Token 用量")
-                Spacer(minLength: 0)
-                Segmented(options: Granularity.allCases.map { ($0, $0.title, nil) },
-                          selection: $granularity,
-                          compact: true)
-                .fixedSize()
+            CardTitle(text: "Token 用量")
+            Segmented(options: Granularity.allCases.map { ($0, $0.title, nil) },
+                      selection: $granularity)
                 .help("本周和本月按自然周、自然月统计；近7天、近30天包含今天，按本地自然日统计")
-            }
-            .frame(height: 19)
 
             // Last baseline, not first: the spend column has a caption line
             // above its figure, and it is the figure that lines up.
@@ -109,9 +82,9 @@ struct UsageCard: View {
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 0) {
                     Text("Est.cost")
-                        .font(.system(size: 9))
+                        .font(.system(size: 11))
                         .foregroundStyle(theme.textTertiary)
-                        .frame(height: 11)
+                        .frame(height: 14)
                     let cost = usage.costs[granularity]
                     RollingNumber(value: cost ?? 0) { cost == nil ? Format.money(nil) : Format.money($0) }
                         .animation(Motion.spring(Motion.figures, reduce: reduceMotion), value: granularity)
@@ -119,12 +92,12 @@ struct UsageCard: View {
                         .monospacedDigit()
                         .foregroundStyle(theme.cost)
                         .lineLimit(1)
-                        .help(cost == nil && parts.count < 2 ? "部分模型缺少价格，无法计算总花费" : "")
+                        .help("按公开单价估算，未匹配到价格的模型按 0 计入费用")
                 }
                 .fixedSize()
                 .hoverTip(costSplit, alignment: .topTrailing)
             }
-            .frame(height: 29)
+            .frame(height: 34)
             // The caption above the spend figure reaches higher than the row
             // was drawn for; without this it touches the period switch.
             .padding(.top, 4)
@@ -165,15 +138,6 @@ struct UsageCard: View {
 
             UsageChart(buckets: usage.buckets[granularity] ?? [], granularity: granularity,
                        tools: parts.map(\.tool))
-
-            // A hairline that takes up a whole point: the panel's height has to
-            // land on one, or the window rounds up past its own content.
-            Rectangle()
-                .fill(theme.separator)
-                .frame(height: 0.5)
-                .frame(height: 1)
-
-            ModelBreakdown(models: usage.models[granularity] ?? [], colorOrder: modelOrder, basis: $basis)
         }
     }
 
@@ -207,7 +171,7 @@ private struct UsageChart: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var buckets: [Bucket]
     var granularity: Granularity
-    /// Stacked bottom-up in this order, each in its own color, when there are two.
+    /// Stacked bottom-up in this order, each in its own color.
     var tools: [Tool]
 
     @State private var hovered: Int?
@@ -225,22 +189,6 @@ private struct UsageChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if tools.count > 1 {
-                HStack(spacing: 10) {
-                    ForEach(tools) { tool in
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(theme.series(tool))
-                                .frame(width: 6, height: 6)
-                            Text(tool.displayName)
-                        }
-                    }
-                }
-                .font(.system(size: 10))
-                .foregroundStyle(theme.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .frame(height: 12)
-            }
             ZStack(alignment: .topLeading) {
                 // Guides sit at fixed offsets in the 48pt plot, as drawn.
                 ForEach([12.0, 24.0, 36.0], id: \.self) { offset in
@@ -253,9 +201,7 @@ private struct UsageChart: View {
                 // bar from the height it had.
                 HStack(alignment: .bottom, spacing: spacing) {
                     ForEach(Array(buckets.enumerated()), id: \.offset) { index, bucket in
-                        StackedBar(shares: tools.count > 1
-                                       ? tools.map { (theme.series($0), bucket.byTool[$0] ?? 0) }
-                                       : [(theme.accent, bucket.tokens)],
+                        StackedBar(shares: tools.map { (theme.series($0), bucket.byTool[$0] ?? 0) },
                                    height: max(0, 48 * CGFloat(bucket.tokens) / CGFloat(peak)))
                             .opacity(hovered == nil || hovered == index ? 1 : 0.4)
                             .frame(maxWidth: .infinity)
@@ -287,7 +233,7 @@ private struct UsageChart: View {
                     ForEach(Swift.stride(from: 0, to: buckets.count, by: stride).map { ($0, buckets[$0].label) },
                             id: \.0) { index, label in
                         Text(label)
-                            .font(.system(size: 9))
+                            .font(.system(size: 11))
                             .monospacedDigit()
                             .foregroundStyle(theme.textTertiary)
                             .fixedSize()
@@ -298,7 +244,7 @@ private struct UsageChart: View {
                     }
                 }
             }
-            .frame(height: 13)
+            .frame(height: 16)
         }
         .overlay(alignment: .topLeading) {
             if let hovered, buckets.indices.contains(hovered) {
@@ -316,13 +262,12 @@ private struct UsageChart: View {
     }
 
     private func tipTable(_ bucket: Bucket) -> TipTable {
-        let rows = tools.count > 1
-            ? tools.compactMap { tool in
-                (bucket.byTool[tool] ?? 0) > 0
-                    ? TipRow(tool: tool, value: Format.compact(bucket.byTool[tool] ?? 0)) : nil
-            }
-            : []
-        return TipTable(title: tipTitle(bucket), total: Format.compact(bucket.tokens), rows: rows)
+        let rows = tools.compactMap { tool in
+            (bucket.byTool[tool] ?? 0) > 0
+                ? TipRow(tool: tool, value: Format.compact(bucket.byTool[tool] ?? 0)) : nil
+        }
+        return TipTable(title: tipTitle(bucket),
+                        total: rows.count == 1 ? nil : Format.compact(bucket.tokens), rows: rows)
     }
 
     /// The axis is terse by design; the readout spells the period out.
@@ -382,13 +327,26 @@ private struct StackedBar: View {
 
 /// Share bar plus one row per model, measured in whichever of tokens or
 /// spend the header's switch selects.
-private struct ModelBreakdown: View {
+struct ModelBreakdownCard: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var models: [ModelUsage]
-    /// Model ids in the order they take the palette's colors.
-    var colorOrder: [String]
+    var usage: UsageSummary
+    var granularity: Granularity
     @Binding var basis: ShareBasis
+
+    private var models: [ModelUsage] { usage.models[granularity] ?? [] }
+    /// Models in the order they take colors: by this month's tokens, then by
+    /// the week's, the day's, and the recent periods for any the month lacks.
+    /// A model keeps its color across periods and bases.
+    private var colorOrder: [String] {
+        var order: [String] = []
+        for granularity in [Granularity.month, .week, .day, .recentMonth, .recentWeek] {
+            for model in usage.models[granularity] ?? [] where !order.contains(model.model) {
+                order.append(model.model)
+            }
+        }
+        return order
+    }
 
     /// Models past the palette share the tertiary gray.
     private func color(_ model: ModelUsage) -> Color {
@@ -405,10 +363,10 @@ private struct ModelBreakdown: View {
     private var total: Double { max(0.01, ordered.reduce(0) { $0 + weight($1) }) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        Card(spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("按模型")
-                    .font(.system(size: 10, weight: .medium))
+                Text("模型明细 · \(granularity.title)")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.textSecondary)
                 Spacer()
                 Button {
@@ -419,7 +377,7 @@ private struct ModelBreakdown: View {
                         Image(systemName: "arrow.left.arrow.right")
                             .font(.system(size: 8, weight: .semibold))
                     }
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                 }
                 .buttonStyle(QuietButtonStyle())
                 // Back over the style's 12pt margin, so the label keeps to the
@@ -471,7 +429,6 @@ private struct ModelBreakdown: View {
                         .monospacedDigit()
                         .foregroundStyle(basis == .cost ? theme.textPrimary : theme.textSecondary)
                         .frame(width: 56, alignment: .trailing)
-                        .help(model.cost == nil ? "未找到此模型的价格" : "")
                 }
                 .frame(height: 17)
             }

@@ -80,10 +80,7 @@ enum Format {
         "\(Int((abs(change) * 100).rounded()))%"
     }
 
-    /// "2 天 3 小时后" / "2 小时 14 分后" / "47 分后" — the quota row names the
-    /// window, so the word 重置 would only repeat what the column already is.
-    /// Empty when no boundary was reported — the row then carries the token
-    /// figure alone rather than a made-up time.
+    /// Remaining time until the quota resets; empty when no boundary is reported.
     static func reset(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "" }
         let seconds = date.timeIntervalSince(now)
