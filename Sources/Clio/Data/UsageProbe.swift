@@ -84,7 +84,7 @@ enum UsageProbe {
     }
 
     /// The system's own proxy configuration, in the form command-line tools read.
-    private static func systemProxyEnvironment() -> [String: String] {
+    static func systemProxyEnvironment() -> [String: String] {
         guard let settings = CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any] else {
             return [:]
         }

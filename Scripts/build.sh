@@ -55,7 +55,8 @@ clang -target "$target" -isysroot "$sdk" -Wall -Wextra -Werror -O2 \
 helper="$app/Contents/Resources/CodexHelper/CodexHelper.app"
 mkdir -p "$helper/Contents/MacOS" "$helper/Contents/Resources"
 cp "$root/Tools/CodexHelper/Info.plist" "$helper/Contents/"
-cp "$root/Resources/AppIcon.icns" "$helper/Contents/Resources/"
+/usr/bin/python3 "$root/Scripts/build-helper-icon.py" \
+    "$root/Resources/AppIcon.icns" "$helper/Contents/Resources/AppIcon.icns"
 cp "$app/Contents/Resources/CodexHelper/CodexHelper" "$helper/Contents/MacOS/"
 # A Developer ID signature is what lets the app open on someone else's Mac
 # without a Gatekeeper warning, and it is also what launch-at-login

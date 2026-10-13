@@ -7,6 +7,7 @@ enum DashboardBuilder {
         var planName: String?
         /// Real utilisation, from whichever source reported it most recently.
         var rateLimits: RateLimitSnapshot?
+        var remainingResets: Int?
     }
 
     static let fiveHours: TimeInterval = 5 * 3600
@@ -19,6 +20,7 @@ enum DashboardBuilder {
                          rejections: [QuotaRejection],
                          prices: PriceTable,
                          quota: QuotaConfig,
+                         ledger: UsageLedger? = nil,
                          now: Date = Date(),
                          calendar: Calendar = .current) -> ToolSnapshot {
         let sorted = events.sorted { $0.timestamp < $1.timestamp }
@@ -31,14 +33,16 @@ enum DashboardBuilder {
                 ? fiveHourWindow(sorted, rejections: rejections, live: live?.fiveHour, now: now) : nil,
             week: weekWindow(sorted, live: live?.sevenDay, now: now, calendar: calendar),
             modelQuota: modelQuotaWindow(sorted, live: live, now: now, calendar: calendar),
-            usage: usage(tool: tool, sorted, prices: prices, now: now, calendar: calendar),
-            updatedAt: now
+            usage: usage(tool: tool, sorted, prices: prices, ledger: ledger, now: now, calendar: calendar),
+            updatedAt: now,
+            remainingResets: quota.remainingResets
         )
     }
 
     private static func usage(tool: Tool,
                               _ sorted: [UsageEvent],
                               prices: PriceTable,
+                              ledger: UsageLedger?,
                               now: Date,
                               calendar: Calendar) -> UsageSummary {
         var totals: [Granularity: TokenCounts] = [:]
@@ -54,7 +58,7 @@ enum DashboardBuilder {
 
             totals[granularity] = inCurrent.reduce(into: TokenCounts()) { $0 += $1.counts }
             costs[granularity] = cost(of: inCurrent, prices: prices)
-            previousTotals[granularity] = sorted
+            previousTotals[granularity] = ledger?.tokens(in: previous, calendar: calendar) ?? sorted
                 .filter { previous.contains($0.timestamp) }
                 .reduce(0) { $0 + $1.counts.total }
             buckets[granularity] = bucket(inCurrent, tool: tool, granularity: granularity, range: current,
@@ -67,7 +71,7 @@ enum DashboardBuilder {
                             costs: costs,
                             buckets: buckets,
                             models: models,
-                            dailyTokens: dailyTokens(sorted, now: now, calendar: calendar),
+                            dailyTokens: dailyTokens(sorted, ledger: ledger, now: now, calendar: calendar),
                             activity: activity(sorted, now: now, calendar: calendar))
     }
 
@@ -236,6 +240,7 @@ enum DashboardBuilder {
 
     /// Tokens per calendar day for the last 22 weeks — the heatmap's span.
     private static func dailyTokens(_ events: [UsageEvent],
+                                    ledger: UsageLedger?,
                                     now: Date,
                                     calendar: Calendar) -> [Date: Int] {
         let earliest = calendar.date(byAdding: .day, value: -22 * 7, to: calendar.startOfDay(for: now)) ?? now
@@ -244,7 +249,8 @@ enum DashboardBuilder {
             let day = calendar.startOfDay(for: event.timestamp)
             totals[day, default: 0] += event.counts.total
         }
-        return totals
+        return totals.merging(ledger?.daily(from: earliest, calendar: calendar) ?? [:],
+                              uniquingKeysWith: { _, stored in stored })
     }
 
     /// Gaps longer than this are treated as time away rather than time worked.

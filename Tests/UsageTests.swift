@@ -13,6 +13,9 @@ enum UsageTests {
         try testArchiveMove()
         try testArchiveOnly()
         try testUpgrade()
+        try testCodexQuotaSources()
+        testQuotaConflicts()
+        try testUsageHistory()
         try testCacheWrites()
         try testLegacyUsage()
         try testCompressedLogs()
@@ -31,7 +34,7 @@ enum UsageTests {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("18 usage regression scenarios passed")
+        print("21 usage regression scenarios passed")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -206,16 +209,164 @@ enum UsageTests {
         let base = try directories("upgrade")
         let file = try log(base, "upgrade", lines: [try usage(-60, plan: "plus", fiveHour: true)])
         let reader = CodexReader(root: base.appending(path: "sessions"))
-        expect(reader.refresh(now: now).quota?.fiveHour != nil, "reported five-hour window must be retained")
+        expect(reader.refresh(now: now).events.count == 1, "usage before a plan upgrade must be counted")
         try append(usage(-50, total: 2200), to: file)
         let result = reader.refresh(now: now)
-        expect(result.plan == "Pro 5×", "prolite must display as Pro 5×")
+        expect(PlanReader.codexDisplayName(for: "prolite") == "Pro 5×", "prolite must display as Pro 5×")
         expect(result.events.reduce(0, { $0 + $1.counts.total }) == 2200, "upgrade must retain earlier usage")
-        expect(result.quota?.fiveHour == nil, "new subscription without five-hour quota must clear the old window")
         try append(usage(-40, total: 3300, plan: "pro"), to: file)
-        expect(reader.refresh(now: now).plan == "Pro 20×", "Codex pro must display as Pro 20×")
+        expect(reader.refresh(now: now).events.reduce(0, { $0 + $1.counts.total }) == 3300,
+               "a further plan change must retain all usage")
+        expect(PlanReader.codexDisplayName(for: "pro") == "Pro 20×", "Codex pro must display as Pro 20×")
         let claudeConfig = Data(#"{"oauthAccount":{"organizationType":"claude_pro"}}"#.utf8)
         expect(PlanReader.parse(claudeConfig) == "Pro", "Claude Pro must keep its own plan label")
+    }
+
+    private static func testCodexQuotaSources() throws {
+        let base = try directories("quota-sources")
+        let file = try log(base, "live", lines: [try usage(-60, fiveHour: true)])
+        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let initial = reader.refresh(now: now)
+        expect(initial.quota?.fiveHour?.usedPercentage == 20, "local short-window quota is read")
+        expect(initial.quota?.sevenDay?.usedPercentage == 10, "local weekly quota is read")
+        let api = RateLimitSnapshot(updatedAt: now.addingTimeInterval(-55),
+                                   sevenDay: .init(usedPercentage: 40, resetsAt: now.addingTimeInterval(86400)), modelScoped: [])
+        let selected = RateLimitSnapshot.latest([initial.quota!, api], now: now, maxAge: 3600)
+        expect(selected?.sevenDay?.usedPercentage == 40, "newer API quota replaces local quota")
+        expect(selected?.fiveHour == nil, "a newer complete response removes an absent short window")
+        try append(usage(-50, total: 2200), to: file)
+        let fresh = reader.refresh(now: now)
+        let logged = RateLimitSnapshot.latest([api, fresh.quota!], now: now, maxAge: 3600)
+        expect(logged?.updatedAt == fresh.quota?.updatedAt, "newer log quota wins over older API data")
+        expect(RateLimitSnapshot.latest([fresh.quota!], now: now, maxAge: 3600) != nil,
+               "fresh local quota remains available when the API fails")
+        expect(RateLimitSnapshot.latest([fresh.quota!], now: now.addingTimeInterval(4000), maxAge: 3600) == nil,
+               "old log quota must not remain available indefinitely")
+        let payload: [String: Any] = ["type": "event_msg", "timestamp": ISO8601DateFormatter().string(from: now.addingTimeInterval(-40)),
+            "payload": ["type": "token_count", "info": NSNull(), "rate_limits": [
+                "primary": ["used_percent": 70, "window_minutes": 10080, "resets_at": now.addingTimeInterval(86400).timeIntervalSince1970]]]]
+        try append(String(decoding: JSONSerialization.data(withJSONObject: payload), as: UTF8.self), to: file)
+        let quotaOnly = reader.refresh(now: now)
+        expect(quotaOnly.quota?.sevenDay?.usedPercentage == 70 && quotaOnly.events.count == 2,
+               "quota-only log updates must not create token usage")
+        let newer = snapshot(quotaOnly.events, limits: quotaOnly.quota)
+        expect(newer.week.fraction == 0.7, "log quota reaches the dashboard used by the menu bar")
+        try append(usage(-80, total: 2200, fiveHour: true), to: file)
+        expect(reader.refresh(now: now).quota?.sevenDay?.usedPercentage == 70,
+               "out-of-order log lines cannot replace newer quota")
+        try append(usage(-30, total: 2200), to: file)
+        let duplicate = reader.refresh(now: now)
+        expect(duplicate.quota?.sevenDay?.usedPercentage == 10 && duplicate.events.count == 2,
+               "repeated token totals can still carry a new quota snapshot")
+    }
+
+    private static func testQuotaConflicts() {
+        let reset = now.addingTimeInterval(3600)
+        let high = RateLimitSnapshot(updatedAt: now.addingTimeInterval(-10),
+            fiveHour: .init(usedPercentage: 60, resetsAt: reset),
+            sevenDay: .init(usedPercentage: 50, resetsAt: now.addingTimeInterval(86400)),
+            modelScoped: [.init(displayName: "Fable", utilization: 40, resetsAt: now.addingTimeInterval(86400))])
+        var delayed = high
+        delayed.updatedAt = now
+        delayed.fiveHour?.usedPercentage = 20
+        delayed.sevenDay?.usedPercentage = 30
+        delayed.modelScoped[0].utilization = 10
+        let stable = delayed.stabilized(against: high, now: now)
+        expect(stable.fiveHour?.usedPercentage == 60 && stable.sevenDay?.usedPercentage == 50,
+               "delayed same-window reports cannot make either tool's usage decrease")
+        expect(stable.modelScoped[0].utilization == 40, "scoped Claude quotas cannot decrease within the same window")
+        delayed.fiveHour?.resetsAt = reset.addingTimeInterval(-0.007526)
+        expect(delayed.stabilized(against: high, now: now).fiveHour?.usedPercentage == 60,
+               "second and fractional-second reset timestamps identify the same window")
+        var partial = delayed
+        partial.fiveHour?.usedPercentage = nil
+        expect(partial.stabilized(against: high, now: now).fiveHour?.usedPercentage == 60,
+               "a partial report cannot erase a known value within the same window")
+        partial.fiveHour?.resetsAt = nil
+        expect(partial.stabilized(against: high, now: now).fiveHour?.usedPercentage == 60,
+               "an undated window cannot replace a known active window")
+        var growing = high
+        growing.updatedAt = now
+        growing.fiveHour?.usedPercentage = 65
+        expect(growing.stabilized(against: high, now: now).fiveHour?.usedPercentage == 65,
+               "new usage within the same window continues to increase")
+        var restarted = delayed
+        restarted.fiveHour?.resetsAt = reset.addingTimeInterval(5 * 3600)
+        restarted.fiveHour?.usedPercentage = 0
+        expect(restarted.stabilized(against: high, now: now).fiveHour?.usedPercentage == 0,
+               "a new reset window allows usage to return to zero")
+        var oldWindow = delayed
+        oldWindow.fiveHour?.resetsAt = reset.addingTimeInterval(-600)
+        oldWindow.fiveHour?.usedPercentage = 99
+        expect(oldWindow.stabilized(against: restarted, now: now).fiveHour?.usedPercentage == 0,
+               "a delayed previous-window report cannot undo a reset")
+        expect(delayed.stabilized(against: high, now: now, allowsDecrease: true).fiveHour?.usedPercentage == 20,
+               "confirmed manual resets allow API usage to decrease")
+        expect(delayed.stabilized(against: high, now: reset.addingTimeInterval(1)).fiveHour?.usedPercentage == 20,
+               "ended windows cannot preserve their old usage")
+        let absent = RateLimitSnapshot(updatedAt: now, sevenDay: delayed.sevenDay, modelScoped: [])
+        expect(absent.stabilized(against: high, now: now).fiveHour == nil,
+               "complete Codex snapshots do not restore a removed short window")
+        let old = RateLimitSnapshot(updatedAt: now.addingTimeInterval(-60), fiveHour: high.fiveHour,
+                                    sevenDay: high.sevenDay, modelScoped: high.modelScoped)
+        let feed = RateLimitSnapshot(updatedAt: now, fiveHour: growing.fiveHour, sevenDay: delayed.sevenDay, modelScoped: [])
+        let merged = RateLimitSnapshot.merged([old, feed, high], now: now, maxAge: 3600)!.stabilized(against: high, now: now)
+        expect(merged.fiveHour?.usedPercentage == 65 && merged.sevenDay?.usedPercentage == 50,
+               "Claude cache and status-line conflicts resolve without usage oscillation")
+        expect(merged.modelScoped.first?.utilization == 40, "status-line updates retain cache-only scoped quotas")
+        let expired = RateLimitSnapshot(updatedAt: now, fiveHour: .init(usedPercentage: 99, resetsAt: now.addingTimeInterval(-1)), modelScoped: [])
+        expect(RateLimitSnapshot.latest([expired], now: now, maxAge: 3600) == nil,
+               "expired Codex windows are unavailable")
+        let boundary = RateLimitSnapshot.merged([expired], now: now, maxAge: 3600)
+        expect(snapshot([], tool: .claudeCode, limits: boundary).fiveHour?.fraction == 0,
+               "Claude's ended short window still establishes a zero-usage boundary")
+        let undated = Data(#"{"cachedUsageUtilization":{"utilization":{"five_hour":{"utilization":20}}}}"#.utf8)
+        expect(ClaudeConfigReader.parse(undated) == nil, "undated Claude caches cannot appear newly fetched")
+        let dated = Data(#"{"cachedUsageUtilization":{"fetchedAtMs":1000000,"utilization":{"five_hour":{"utilization":20}}}}"#.utf8)
+        expect(ClaudeConfigReader.parse(dated)?.updatedAt == Date(timeIntervalSince1970: 1000),
+               "Claude caches retain their actual fetch timestamp")
+    }
+
+    private static func testUsageHistory() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        func date(_ month: Int, _ day: Int) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: 12))!
+        }
+        func usageEvent(_ date: Date, _ tokens: Int) -> UsageEvent {
+            UsageEvent(timestamp: date, model: "gpt-priced", counts: TokenCounts(input: tokens),
+                       dedupeKey: "\(date)-\(tokens)", sessionID: "history")
+        }
+        let fixtureNow = date(10, 13)
+        let legacy = try JSONDecoder().decode(UsageLedger.self, from: Data(#"{"days":{"2026-07-08":4000000,"2026-08-10":1200000,"2026-09-20":800,"2026-10-11":300,"2026-10-12":999}}"#.utf8))
+        let events = [usageEvent(date(7, 8), 10), usageEvent(date(10, 12), 200), usageEvent(date(10, 12), 300)]
+        let ledger = UsageLedger.updated(legacy, events: events,
+            history: [calendar.startOfDay(for: date(6, 25)): 600, calendar.startOfDay(for: date(8, 10)): 20],
+            now: fixtureNow, retentionDays: 30, calendar: calendar)
+        expect(ledger.days["2026-07-08"] == 4_000_000 && ledger.days["2026-08-10"] == 1_200_000,
+               "partial or deleted old logs cannot erase saved historical daily totals")
+        expect(ledger.days["2026-10-12"] == 500, "recent available logs are recalculated without adding the old cache")
+        expect(ledger.days["2026-10-11"] == 300, "missing recent logs do not erase a previously saved day")
+        expect(ledger.days["2026-06-25"] == 600, "Claude's statistics cache fills an otherwise missing historical day")
+        let repeated = UsageLedger.updated(ledger, events: events, history: [:], now: fixtureNow,
+                                          retentionDays: 30, calendar: calendar)
+        expect(repeated == ledger, "repeated scans do not accumulate cached totals again")
+        expect(UsageLedger.updated(ledger, events: [], history: [:], now: fixtureNow,
+                                   retentionDays: 30, calendar: calendar) == ledger,
+               "deleting every source log preserves saved daily history")
+        let snapshot = DashboardBuilder.snapshot(tool: .claudeCode, events: events, rejections: [], prices: prices,
+            quota: .init(), ledger: ledger, now: fixtureNow, calendar: calendar)
+        expect(snapshot.usage.dailyTokens[calendar.startOfDay(for: date(7, 8))] == 4_000_000,
+               "saved July totals are restored to the heatmap")
+        expect(snapshot.usage.dailyTokens[calendar.startOfDay(for: date(10, 12))] == 500,
+               "the heatmap does not count recent usage twice")
+        expect(snapshot.usage.previousTotals[.month] == 800, "previous-month comparisons include retained history")
+        expect(snapshot.usage.totals[.month]?.total == 500 && snapshot.usage.models[.month]?.first?.tokens == 500,
+               "selected-period totals and model details remain based on current deduplicated logs")
+        let empty = DashboardBuilder.snapshot(tool: .claudeCode, events: [], rejections: [], prices: prices,
+            quota: .init(), ledger: ledger, now: fixtureNow, calendar: calendar)
+        expect(empty.usage.dailyTokens == snapshot.usage.dailyTokens,
+               "historical heatmap data remains available with no source events")
     }
 
     private static func testCacheWrites() throws {

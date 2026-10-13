@@ -221,6 +221,8 @@ struct ToolSnapshot {
     let modelQuota: QuotaWindow?
     let usage: UsageSummary
     let updatedAt: Date
+    /// Available manual resets; nil when the account did not report a count.
+    var remainingResets: Int? = nil
 
     /// Prefer the short-term allowance when its percentage is available.
     var menuBarQuota: QuotaWindow {

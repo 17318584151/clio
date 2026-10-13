@@ -12,10 +12,8 @@ private struct QuotaTip {
 /// The quota block: for each account, two rolling windows and an optional
 /// per-model allowance beneath the account's name and plan.
 ///
-/// A window with no reported utilisation shows the tokens it has actually
-/// consumed and when it resets. The percentage and its bar appear only once the
-/// account reports one — the allowance is not recorded locally, and the
-/// rate-limit rejections in the log do not imply a consistent one.
+/// A Codex window without reported utilisation displays an unknown value.
+/// Claude Code windows can display local token totals until utilisation is reported.
 struct SubscriptionCard: View {
     @Environment(\.theme) private var theme
     var snapshots: [ToolSnapshot]
@@ -37,22 +35,37 @@ struct SubscriptionCard: View {
                         .frame(height: 0.5)
                         .frame(height: 1)
                 }
-                HStack(spacing: 5) {
-                    BrandIcon(tool: snapshot.tool, size: 11,
-                              color: snapshot.tool.brandColor ?? theme.textSecondary)
-                    CardTitle(text: snapshot.tool.displayName)
+                HStack(spacing: 7) {
+                    BrandIcon(tool: snapshot.tool, size: 14,
+                              color: snapshot.tool.brandColor ?? theme.textPrimary)
+                    Text(snapshot.tool.displayName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.textPrimary)
                     Spacer()
                     if let plan = snapshot.plan, !plan.isEmpty {
                         PlanBadge(text: plan)
                     }
                 }
-                .frame(height: 19)
+                .frame(height: 22)
                 if let fiveHour = snapshot.fiveHour {
-                    QuotaRow(window: fiveHour, onTip: { tip = $0 })
+                    QuotaRow(window: fiveHour, showsTokensWhenUnknown: snapshot.tool == .claudeCode,
+                             onTip: { tip = $0 })
                 }
-                QuotaRow(window: snapshot.week, onTip: { tip = $0 })
+                QuotaRow(window: snapshot.week, showsTokensWhenUnknown: snapshot.tool == .claudeCode,
+                         onTip: { tip = $0 })
                 if let modelQuota = snapshot.modelQuota {
                     QuotaRow(window: modelQuota, onTip: { tip = $0 })
+                }
+                if snapshot.tool == .codex {
+                    HStack {
+                        Text("剩余重置次数")
+                        Spacer()
+                        Text(snapshot.remainingResets.map { "\($0) 次" } ?? "未知")
+                            .monospacedDigit()
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.textSecondary)
+                    .frame(height: 17)
                 }
             }
         }
@@ -85,6 +98,7 @@ private struct QuotaRow: View {
     @Environment(\.theme) private var theme
     @Environment(\.panelIsOpen) private var panelIsOpen
     var window: QuotaWindow
+    var showsTokensWhenUnknown = true
     var onTip: (QuotaTip?) -> Void
 
     var body: some View {
@@ -95,7 +109,8 @@ private struct QuotaRow: View {
                     .foregroundStyle(theme.textPrimary)
                 Spacer(minLength: 8)
                 HStack(spacing: 4) {
-                    Text(window.fraction.map(Format.percent) ?? Format.compact(window.used))
+                    Text(window.fraction.map(Format.percent)
+                         ?? (showsTokensWhenUnknown ? Format.compact(window.used) : "未知"))
                         .font(.system(size: 12, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(theme.quotaColor(window.fraction, base: theme.textPrimary))

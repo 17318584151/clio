@@ -139,8 +139,9 @@ class InstallerTests(unittest.TestCase):
         info = plistlib.loads((self.helper.bundle / 'Contents/Info.plist').read_bytes())
         self.assertEqual(info['CFBundleIconFile'], 'AppIcon')
         self.assertTrue(info['LSBackgroundOnly'])
-        self.assertEqual((self.helper.bundle / 'Contents/Resources/AppIcon.icns').read_bytes(),
-                         (RESOURCES.parents[3] / 'Resources/AppIcon.icns').read_bytes())
+        icon = self.helper.bundle / 'Contents/Resources/AppIcon.icns'
+        self.assertEqual(icon.read_bytes()[:4], b'icns')
+        self.assertLess(icon.stat().st_size, (RESOURCES.parents[3] / 'Resources/AppIcon.icns').stat().st_size)
         self.assertEqual(arguments[-2:], ['--proxy-port', str(self.socks.getsockname()[1])])
         self.assertEqual(list(self.helper.directory.glob('hosts.before-*'))[0].read_bytes(), self.before[self.helper.hosts][0])
         self.helper.ready = True

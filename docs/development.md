@@ -44,7 +44,8 @@ bash Scripts/package.sh
 | 命令 | 验证范围 |
 | --- | --- |
 | `bash Scripts/test-usage-periods.sh` | 自然日周期和合并统计 |
-| `bash Scripts/test-usage.sh` | 日志读取、用量聚合及里程碑 |
+| `bash Scripts/test-usage.sh` | 历史每日记录恢复、日志读取、双来源额度冲突、窗口重置、用量聚合及里程碑 |
+| `bash Scripts/test-codex-usage.sh` | Codex 额度与重置次数、登录状态、只读协议及超时 |
 | `bash Scripts/test-quota-ring.sh` | 菜单栏额度比例 |
 | `bash Scripts/test-menubar.sh` | 菜单栏资源与截图 |
 | `bash Scripts/test-ccusage-alignment.sh` | 日志去重、累计差值及周一边界 |
@@ -52,6 +53,8 @@ bash Scripts/package.sh
 | `bash Scripts/test-codex-helper-state.sh` | 辅助服务操作入口的状态判断 |
 
 CodexHelper 测试使用临时文件与随机本机端口，不修改系统安装实例。
+
+`bash Scripts/test-codex-usage.sh --live` 额外使用本机 Codex 的现有登录状态验证只读额度查询。
 
 ## 截图与数据检查
 

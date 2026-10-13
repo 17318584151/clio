@@ -65,7 +65,7 @@ final class Preferences: ObservableObject {
 
     @Published var confettiEnabled: Bool { didSet { defaults.set(confettiEnabled, forKey: "confettiEnabled") } }
     @Published var refreshInterval: TimeInterval { didSet { defaults.set(refreshInterval, forKey: "refreshInterval") } }
-    /// How often Claude Code is asked for the quota state in the background.
+    /// How often both tools are asked for their quota state in the background.
     @Published var quotaInterval: TimeInterval { didSet { defaults.set(quotaInterval, forKey: "quotaInterval") } }
     @Published var menuBarDisplay: MenuBarDisplay { didSet { defaults.set(menuBarDisplay.rawValue, forKey: "menuBarDisplay") } }
     @Published var usageScope: UsageScope { didSet { defaults.set(usageScope.rawValue, forKey: "usageScope") } }

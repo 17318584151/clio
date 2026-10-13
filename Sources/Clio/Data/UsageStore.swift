@@ -7,13 +7,14 @@ import AppKit
 actor LogReaders {
     private let claude = ClaudeCodeReader()
     private let codex = CodexReader()
+    private var codexQuota: RateLimitSnapshot?
+    private var codexRemainingResets: Int?
 
     struct Result: Sendable {
         var claudeEvents: [UsageEvent] = []
         var claudeRejections: [QuotaRejection] = []
         var codexEvents: [UsageEvent] = []
         var codexQuota: RateLimitSnapshot?
-        var codexPlan: String?
         var claudeAvailable = false
         var codexAvailable = false
     }
@@ -31,35 +32,50 @@ actor LogReaders {
             let parsed = codex.refresh()
             result.codexEvents = parsed.events
             result.codexQuota = parsed.quota
-            result.codexPlan = parsed.plan
         }
         return result
     }
 
     /// Parses what is new, then builds the dashboard. Building walks every
     /// event and takes a few hundred milliseconds, so it stays here too.
-    func dashboard(prices: PriceTable, quota: [Tool: DashboardBuilder.QuotaConfig]) -> Dashboard {
+    func dashboard(prices: PriceTable, quota: [Tool: DashboardBuilder.QuotaConfig], quotaMaxAge: TimeInterval) -> Dashboard {
         let parsed = refresh()
+        let history = StatsCacheReader.dailyTokens()
+        let storedClaude = UsageLedger.load(for: .claudeCode)
+        let storedCodex = UsageLedger.load(for: .codex)
 
         var snapshots: [ToolSnapshot] = []
         var events: [UsageEvent] = []
-        if parsed.claudeAvailable && !parsed.claudeEvents.isEmpty {
+        if (parsed.claudeAvailable && !parsed.claudeEvents.isEmpty) || storedClaude?.days.isEmpty == false || !history.isEmpty {
+            let ledger = UsageLedger.updated(storedClaude, events: parsed.claudeEvents, history: history,
+                                             now: Date(), retentionDays: UsageLedger.retentionDays())
+            if ledger != storedClaude { ledger.save(for: .claudeCode) }
             snapshots.append(DashboardBuilder.snapshot(tool: .claudeCode,
                                                        events: parsed.claudeEvents,
                                                        rejections: parsed.claudeRejections,
                                                        prices: prices,
-                                                       quota: quota[.claudeCode] ?? .init()))
+                                                       quota: quota[.claudeCode] ?? .init(), ledger: ledger))
             events += parsed.claudeEvents
         }
-        if parsed.codexAvailable && !parsed.codexEvents.isEmpty {
+        if (parsed.codexAvailable && !parsed.codexEvents.isEmpty) || storedCodex?.days.isEmpty == false {
+            let ledger = UsageLedger.updated(storedCodex, events: parsed.codexEvents, history: [:],
+                                             now: Date(), retentionDays: Int(LogScanner.retention / 86400))
+            if ledger != storedCodex { ledger.save(for: .codex) }
             var config = quota[.codex] ?? .init()
-            if config.rateLimits == nil { config.rateLimits = parsed.codexQuota }
-            if config.planName == nil { config.planName = parsed.codexPlan }
+            let now = Date()
+            let latest = RateLimitSnapshot.latest([config.rateLimits, parsed.codexQuota, codexQuota].compactMap { $0 },
+                                                   now: now, maxAge: quotaMaxAge)
+            let resetUsed = config.remainingResets.flatMap { count in codexRemainingResets.map { count < $0 } } ?? false
+            let afterReset = config.rateLimits.flatMap { api in latest.map { $0.updatedAt >= api.updatedAt } } ?? false
+            codexQuota = latest?.stabilized(against: codexQuota, now: now,
+                                            allowsDecrease: resetUsed && afterReset)
+            if let count = config.remainingResets, !resetUsed || afterReset { codexRemainingResets = count }
+            config.rateLimits = codexQuota
             snapshots.append(DashboardBuilder.snapshot(tool: .codex,
                                                        events: parsed.codexEvents,
                                                        rejections: [],
                                                        prices: prices,
-                                                       quota: config))
+                                                       quota: config, ledger: ledger))
             events += parsed.codexEvents
         }
         return Dashboard(snapshots: snapshots,
@@ -76,8 +92,7 @@ final class UsageStore: ObservableObject {
     @Published private(set) var priceOrigin: PriceOrigin = .builtin
     /// When the price table was last read from models.dev.
     @Published private(set) var priceFetchedAt: Date?
-    /// Quota state captured from the status-line feed, when it is connected.
-    @Published private(set) var rateLimits: RateLimitSnapshot?
+    @Published private(set) var lastQuotaQuery: Date?
 
     /// Raised when a 100M milestone is crossed; the celebration window observes it.
     let milestoneReached = PassthroughSubject<Void, Never>()
@@ -85,8 +100,10 @@ final class UsageStore: ObservableObject {
     private let readers = LogReaders()
     private let prefs = Preferences.shared
     private var timer: Timer?
-    private var lastProbe: Date?
     private var probeInFlight = false
+    private var claudeQuota: RateLimitSnapshot?
+    private var codexReading: CodexUsageProbe.Reading?
+    private var codexProbeInFlight = false
     private var lastFeedUpdate: Date?
     private var quotaWatch: DispatchSourceFileSystemObject?
     private var cancellables: Set<AnyCancellable> = []
@@ -151,10 +168,8 @@ final class UsageStore: ObservableObject {
         let maxAge = prefs.quotaInterval * 2
         let liveLimits = RateLimitSnapshot.merged([feed, config].compactMap { $0 },
                                                   now: Date(),
-                                                  maxAge: maxAge)
-        // A stale snapshot kept only for an ended window's reset time is not a
-        // reading Settings can report.
-        rateLimits = liveLimits.flatMap { Date().timeIntervalSince($0.updatedAt) < maxAge ? $0 : nil }
+                                                  maxAge: maxAge)?.stabilized(against: claudeQuota, now: Date())
+        claudeQuota = liveLimits
         let origin = await PriceService.shared.origin
         let fetchedAt = await PriceService.shared.lastFetch
 
@@ -163,12 +178,13 @@ final class UsageStore: ObservableObject {
             table[tool] = DashboardBuilder.QuotaConfig(
                 // The tier Claude Code records locally, unless overridden.
                 planName: (configured?.isEmpty == false ? configured : nil)
-                    ?? (tool == .claudeCode ? PlanReader.claudeCodePlan() : nil),
-                rateLimits: tool == .claudeCode ? liveLimits : nil
+                    ?? (tool == .claudeCode ? PlanReader.claudeCodePlan() : codexReading?.plan),
+                rateLimits: tool == .claudeCode ? liveLimits : codexReading?.quota,
+                remainingResets: tool == .codex ? codexReading?.remainingResets : nil
             )
         }
 
-        let built = await readers.dashboard(prices: prices, quota: quotaConfig)
+        let built = await readers.dashboard(prices: prices, quota: quotaConfig, quotaMaxAge: maxAge)
 
         priceOrigin = origin
         priceFetchedAt = fetchedAt
@@ -184,22 +200,31 @@ final class UsageStore: ObservableObject {
         probeIfDue(force: true)
     }
 
-    /// Runs alongside the panel rather than in front of it: the CLI takes a
-    /// second or two to answer, and the rest of the dashboard shouldn't wait.
+    /// Both account queries start together and run off the main actor.
     private func probeIfDue(force: Bool = false) {
-        guard !probeInFlight else { return }
-        let due = lastProbe.map { Date().timeIntervalSince($0) >= prefs.quotaInterval } ?? true
-        guard force || due else { return }
-        probeInFlight = true
-        lastProbe = Date()
-        Task { [weak self] in
-            let probed = await Task.detached(priority: .utility, operation: { UsageProbe.fetch() }).value
-            guard let self else { return }
-            self.probeInFlight = false
-            // The answer itself is undated; what the CLI fetched is read back
-            // from `~/.claude.json`, which records when it was fetched.
-            guard probed != nil else { return }
-            await self.refresh()
+        let due = lastQuotaQuery.map { Date().timeIntervalSince($0) >= prefs.quotaInterval } ?? true
+        guard force || due, !probeInFlight || !codexProbeInFlight else { return }
+        lastQuotaQuery = Date()
+        if !probeInFlight {
+            probeInFlight = true
+            Task { [weak self] in
+                let probed = await Task.detached(priority: .utility, operation: { UsageProbe.fetch() }).value
+                guard let self else { return }
+                self.probeInFlight = false
+                // Claude's cache records the fetch time; the control response does not.
+                guard probed != nil else { return }
+                await self.refresh()
+            }
+        }
+        if !codexProbeInFlight {
+            codexProbeInFlight = true
+            Task { [weak self] in
+                let reading = await Task.detached(priority: .utility, operation: { CodexUsageProbe.fetch() }).value
+                guard let self else { return }
+                self.codexReading = reading
+                self.codexProbeInFlight = false
+                await self.refresh()
+            }
         }
     }
 

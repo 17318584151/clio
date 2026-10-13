@@ -20,13 +20,12 @@ enum ClaudeConfigReader {
     static func parse(_ data: Data) -> RateLimitSnapshot? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let cached = root["cachedUsageUtilization"] as? [String: Any],
-              let utilization = cached["utilization"] as? [String: Any]
+              let utilization = cached["utilization"] as? [String: Any],
+              let fetched = cached["fetchedAtMs"] as? Double
         else { return nil }
 
         var snapshot = RateLimitBridge.snapshot(from: utilization)
-        if let fetched = cached["fetchedAtMs"] as? Double {
-            snapshot.updatedAt = Date(timeIntervalSince1970: fetched / 1000)
-        }
+        snapshot.updatedAt = Date(timeIntervalSince1970: fetched / 1000)
         // The scoped window is reported through `limits` here rather than
         // `model_scoped`, which this payload leaves null.
         if snapshot.modelScoped.isEmpty {

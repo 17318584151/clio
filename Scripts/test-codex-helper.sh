@@ -8,6 +8,7 @@ helper="$scratch/CodexHelper.app"
 mkdir -p "$helper/Contents/MacOS" "$helper/Contents/Resources"
 cp "$scratch/CodexHelper" "$helper/Contents/MacOS/"
 cp "$root/Tools/CodexHelper/Info.plist" "$helper/Contents/"
-cp "$root/Resources/AppIcon.icns" "$helper/Contents/Resources/"
+/usr/bin/python3 "$root/Scripts/build-helper-icon.py" \
+    "$root/Resources/AppIcon.icns" "$helper/Contents/Resources/AppIcon.icns"
 codesign --force --sign - "$helper"
 CLIO_HELPER_BINARY="$scratch/CodexHelper" /usr/bin/python3 -I -B "$root/Tests/CodexHelperTests.py"

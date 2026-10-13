@@ -191,6 +191,21 @@ struct SettingsContent: View {
                     .controlSize(.small)
                     .fixedSize()
                 }
+                .help("刷新本地用量与日志中的额度快照，菜单栏圆环随新的额度数据更新")
+                row("额度查询频率", detail: store.lastQuotaQuery.map {
+                    "Claude Code、Codex · 最近查询 \(Format.clock($0))"
+                } ?? "Claude Code、Codex · 尚未查询") {
+                    Picker("", selection: $prefs.quotaInterval) {
+                        Text("每 15 分钟").tag(900.0)
+                        Text("每 30 分钟").tag(1800.0)
+                        Text("每 1 小时").tag(3600.0)
+                        Text("每 2 小时").tag(7200.0)
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+                .help("两个工具并行查询；打开面板时立即查询。时间表示查询开始时间，正在进行的查询不会重复发起")
             }
 
             section("更新") {
@@ -218,6 +233,7 @@ struct SettingsContent: View {
         }
         .font(.system(size: 12))
         .toggleStyle(.switch)
+        .controlSize(.small)
         .padding(20)
         .frame(width: 420, alignment: .leading)
         .onAppear { bridgeState = StatusLineInstaller.state() }
@@ -228,25 +244,12 @@ struct SettingsContent: View {
     }
 
     private var claudeQuotaOptions: some View {
-        VStack(spacing: 0) {
-            row("额度查询", detail: liveStatus) {
-                Picker("", selection: $prefs.quotaInterval) {
-                    Text("每 15 分钟").tag(900.0)
-                    Text("每 30 分钟").tag(1800.0)
-                    Text("每 1 小时").tag(3600.0)
-                    Text("每 2 小时").tag(7200.0)
-                }
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
+        row("状态栏推送", detail: bridgeStatus) {
+            Button(bridgeState == .installed ? "移除" : "接入") {
+                toggleBridge()
             }
-            row("状态栏推送", detail: bridgeStatus) {
-                Button(bridgeState == .installed ? "移除" : "接入") {
-                    toggleBridge()
-                }
-                .controlSize(.small)
-                .disabled(bridgeState == .unavailable)
-            }
+            .controlSize(.small)
+            .disabled(bridgeState == .unavailable)
         }
         .padding(.leading, 22)
     }
@@ -435,12 +438,6 @@ struct SettingsContent: View {
             // The button reflects whatever the file actually says afterwards.
         }
         bridgeState = StatusLineInstaller.state()
-    }
-
-    private var liveStatus: String {
-        guard UsageProbe.executable != nil else { return "未找到 claude" }
-        guard let snapshot = store.rateLimits else { return "暂无数据" }
-        return "最近读取 · \(Format.clock(snapshot.updatedAt))"
     }
 
     private func binding(_ key: ReferenceWritableKeyPath<Preferences, [String: String]>, _ tool: Tool) -> Binding<String> {

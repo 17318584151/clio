@@ -50,7 +50,8 @@ enum DesignSample {
                                           activeTrend: [1.8, 2.4, 3.1, 2.2, 3.6, 2.9, 3.4, 2.6],
                                           requestTrend: [820, 960, 1_310, 880, 1_450, 1_120, 1_380, 1_204])
             ),
-            updatedAt: now
+            updatedAt: now,
+            remainingResets: 2
         )
     }
 
