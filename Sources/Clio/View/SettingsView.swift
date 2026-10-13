@@ -175,7 +175,7 @@ struct SettingsContent: View {
                         Toggle("", isOn: $prefs.confettiEnabled).labelsHidden()
                     }
                 }
-                .help("两个工具合计，日、周或月累计每突破 100M Token 时全屏庆祝")
+                .help("两个工具当天合计 Token 每达到 100M、200M 等档位时全屏庆祝")
 
                 row("开机自启") {
                     Toggle("", isOn: $prefs.launchAtLogin).labelsHidden()

@@ -203,8 +203,7 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    /// All three periods are watched: a calendar week can straddle a month
-    /// boundary, and the day is what the panel shows by default.
+    /// Daily milestones use the combined usage of both tools.
     private func checkMilestone(_ usage: UsageSummary) {
         let previous = prefs.loadMilestones()
         let current = Milestones.state(dayTokens: usage.totals[.day]?.total ?? 0,

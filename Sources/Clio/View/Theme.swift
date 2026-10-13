@@ -45,8 +45,7 @@ struct Theme {
     /// Each tool's color where their shares are drawn together.
     var claudeSeries: Color
     var codexSeries: Color
-    /// One color per model in the breakdown, handed out in this order. Blue and
-    /// orange are left out: they stand for the two tools in the same card.
+    /// Model colors in allocation order, shared by the share bar and legend.
     var modelPalette: [Color]
 
     static let light = Theme(
@@ -81,7 +80,9 @@ struct Theme {
         claudeSeries: Color(hex: 0xD97757),
         codexSeries: Color(hex: 0x0A84FF),
         modelPalette: [Color(hex: 0x1BAF7A), Color(hex: 0xEDA100), Color(hex: 0xE87BA4),
-                       Color(hex: 0x008300), Color(hex: 0x6250D6), Color(hex: 0xE34948)]
+                       Color(hex: 0x008300), Color(hex: 0x6250D6), Color(hex: 0xE34948),
+                       Color(hex: 0x397BC9), Color(hex: 0xA46536), Color(hex: 0x1696A3),
+                       Color(hex: 0x9C3E9C), Color(hex: 0x7A801D), Color(hex: 0xD5671D)]
     )
 
     static let dark = Theme(
@@ -116,7 +117,9 @@ struct Theme {
         claudeSeries: Color(hex: 0xD0704F),
         codexSeries: Color(hex: 0x0A84FF),
         modelPalette: [Color(hex: 0x199E70), Color(hex: 0xC98500), Color(hex: 0xD55181),
-                       Color(hex: 0x008300), Color(hex: 0x9085E9), Color(hex: 0xE66767)]
+                       Color(hex: 0x008300), Color(hex: 0x9085E9), Color(hex: 0xE66767),
+                       Color(hex: 0x69A5EB), Color(hex: 0xC18C5D), Color(hex: 0x46B9C6),
+                       Color(hex: 0xCA73CA), Color(hex: 0xABB44E), Color(hex: 0xEC944B)]
     )
 
     static func resolve(_ scheme: ColorScheme) -> Theme {
@@ -133,6 +136,13 @@ struct Theme {
 
     func series(_ tool: Tool) -> Color {
         tool == .claudeCode ? claudeSeries : codexSeries
+    }
+
+    func modelColor(at index: Int) -> Color {
+        if index < modelPalette.count { return modelPalette[index] }
+        let hue = (0.53 + Double(index - modelPalette.count) * 0.618033988749895)
+            .truncatingRemainder(dividingBy: 1)
+        return Color(hue: hue, saturation: 0.65, brightness: 0.78)
     }
 
     /// Ring and bar color for a quota window: monochrome below half, orange

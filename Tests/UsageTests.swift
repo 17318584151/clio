@@ -385,6 +385,12 @@ enum UsageTests {
         let still100 = milestoneState(claude: 100_000_000, codex: 40_000_000)
         expect(!Milestones.shouldCelebrate(previous: combined100, current: still100),
                "a tool reaching 100M on its own must not celebrate a combined floor already reached")
+        let below200 = milestoneState(claude: 159_999_999, codex: 40_000_000)
+        expect(!Milestones.shouldCelebrate(previous: combined100, current: below200),
+               "daily usage below 200M must not celebrate the next milestone")
+        let combined200 = milestoneState(claude: 160_000_000, codex: 40_000_000)
+        expect(Milestones.shouldCelebrate(previous: below200, current: combined200),
+               "daily usage reaching exactly 200M must celebrate again")
     }
 
     private static func testMilestonePersistence() throws {
@@ -404,15 +410,20 @@ enum UsageTests {
                                 ("month", \MilestoneState.monthFloor)] {
             var current = previous
             current[keyPath: floor] += 1
-            expect(Milestones.shouldCelebrate(previous: previous, current: current),
-                   "a \(period) crossing must trigger a celebration")
+            expect(Milestones.shouldCelebrate(previous: previous, current: current) == (period == "day"),
+                   "only a daily crossing must trigger a celebration; checked \(period)")
         }
-        let nextYear = Calendar.current.date(byAdding: .year, value: 1, to: now)!
-        let reset = milestoneState(claude: 200_000_000, codex: 200_000_000, at: nextYear)
+        let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: now)!
+        let reset = milestoneState(at: nextDay)
         expect(!Milestones.shouldCelebrate(previous: previous, current: reset),
-               "new calendar periods must establish new baselines")
-        expect(Milestones.merged(previous: previous, current: reset) == reset,
-               "completed floors must reset with their calendar periods")
+               "a new day without usage must not celebrate")
+        expect(Milestones.merged(previous: previous, current: reset).dayFloor == 0,
+               "completed daily floors must reset on a new day")
+        let next100 = milestoneState(claude: 100_000_000, at: nextDay)
+        expect(Milestones.shouldCelebrate(previous: reset, current: next100),
+               "the next day must celebrate its own first 100M")
+        expect(Milestones.shouldCelebrate(previous: previous, current: next100),
+               "a new day's first scan reaching 100M must celebrate even after yesterday reached 200M")
     }
 
     private static func testPerToolMilestones() {

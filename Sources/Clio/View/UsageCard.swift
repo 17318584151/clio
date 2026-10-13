@@ -333,6 +333,8 @@ struct ModelBreakdownCard: View {
     var usage: UsageSummary
     var granularity: Granularity
     @Binding var basis: ShareBasis
+    @State private var isExpanded = false
+    @State private var isDisclosureHovered = false
 
     private var models: [ModelUsage] { usage.models[granularity] ?? [] }
     /// Models in the order they take colors: by this month's tokens, then by
@@ -348,11 +350,10 @@ struct ModelBreakdownCard: View {
         return order
     }
 
-    /// Models past the palette share the tertiary gray.
     private func color(_ model: ModelUsage) -> Color {
-        guard let index = colorOrder.firstIndex(of: model.model), index < theme.modelPalette.count
+        guard let index = colorOrder.firstIndex(of: model.model)
         else { return theme.textTertiary }
-        return theme.modelPalette[index]
+        return theme.modelColor(at: index)
     }
 
     private func weight(_ model: ModelUsage) -> Double {
@@ -360,6 +361,7 @@ struct ModelBreakdownCard: View {
     }
 
     private var ordered: [ModelUsage] { models.sorted { weight($0) > weight($1) } }
+    private var visibleModels: [ModelUsage] { isExpanded ? ordered : Array(ordered.prefix(5)) }
     private var total: Double { max(0.01, ordered.reduce(0) { $0 + weight($1) }) }
 
     var body: some View {
@@ -406,7 +408,7 @@ struct ModelBreakdownCard: View {
             }
             .frame(height: 5)
 
-            ForEach(ordered) { model in
+            ForEach(visibleModels) { model in
                 HStack(spacing: 8) {
                     HStack(spacing: 7) {
                         Circle()
@@ -431,6 +433,29 @@ struct ModelBreakdownCard: View {
                         .frame(width: 56, alignment: .trailing)
                 }
                 .frame(height: 17)
+            }
+
+            if models.count > 5 {
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(isExpanded ? "收起" : "展开全部")
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isDisclosureHovered ? theme.textPrimary : theme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(isDisclosureHovered ? theme.segmentedFill : .clear,
+                                in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .onHover { isDisclosureHovered = $0 }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isDisclosureHovered)
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
     }

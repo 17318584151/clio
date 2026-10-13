@@ -32,16 +32,12 @@ enum Milestones {
                               monthFloor: monthTokens / step)
     }
 
-    /// Fire when any period reached a higher 100M floor *within the same
-    /// period*. A period-id change means the counter reset, which re-baselines
-    /// silently; `nil` is the first observation ever and never fires, so
-    /// pre-existing usage isn't celebrated on first launch.
+    /// Celebrate daily 100M crossings. A new day starts at zero; the first
+    /// observation ever establishes a baseline without celebrating existing usage.
     static func shouldCelebrate(previous: MilestoneState?, current: MilestoneState) -> Bool {
         guard let previous else { return false }
-        let dayCrossed = previous.dayID == current.dayID && current.dayFloor > previous.dayFloor
-        let weekCrossed = previous.weekID == current.weekID && current.weekFloor > previous.weekFloor
-        let monthCrossed = previous.monthID == current.monthID && current.monthFloor > previous.monthFloor
-        return dayCrossed || weekCrossed || monthCrossed
+        let previousFloor = previous.dayID == current.dayID ? previous.dayFloor : 0
+        return current.dayFloor > previousFloor
     }
 
     /// Keep the stored floors monotonic inside a period so a partial read can't
