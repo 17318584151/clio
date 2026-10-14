@@ -97,6 +97,7 @@ final class UsageStore: ObservableObject {
     /// Raised when a 100M milestone is crossed; the celebration window observes it.
     let milestoneReached = PassthroughSubject<Void, Never>()
 
+    private var isPreview = false
     private let readers = LogReaders()
     private let prefs = Preferences.shared
     private var timer: Timer?
@@ -159,6 +160,7 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh() async {
+        guard !isPreview else { return }
         let prices = await PriceService.shared.table()
         let feed = RateLimitBridge.load()
         lastFeedUpdate = feed?.updatedAt
@@ -197,6 +199,7 @@ final class UsageStore: ObservableObject {
 
     /// Called as the panel opens, so what it shows is current.
     func probeNow() {
+        guard !isPreview else { return }
         probeIfDue(force: true)
     }
 
@@ -245,6 +248,9 @@ final class UsageStore: ObservableObject {
     /// A store holding a fixed dashboard, for rendering a design comparison.
     static func preview(_ dashboard: Dashboard) -> UsageStore {
         let store = UsageStore()
+        store.isPreview = true
+        store.timer?.invalidate()
+        store.timer = nil
         store.dashboard = dashboard
         store.isLoading = false
         return store

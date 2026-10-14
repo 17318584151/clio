@@ -133,7 +133,7 @@ struct Bucket: Identifiable {
 }
 
 enum Granularity: String, CaseIterable, Identifiable {
-    case day, week, month, recentWeek, recentMonth
+    case day, week, month, recentWeek, recentMonth, custom
 
     var id: String { rawValue }
 
@@ -144,6 +144,7 @@ enum Granularity: String, CaseIterable, Identifiable {
         case .month: return "本月"
         case .recentWeek: return "近7天"
         case .recentMonth: return "近30天"
+        case .custom: return "自定义"
         }
     }
 }
@@ -200,6 +201,10 @@ struct UsageSummary {
     let dailyTokens: [Date: Int]
     let activity: ActivitySummary
 
+    /// Periods whose daily ledger totals exceed the available log details.
+    var unavailableDetails: Set<Granularity> = []
+    var rangeSource: UsageRangeSource? = nil
+
     /// Change against the preceding period of the same length.
     func tokenTrend(_ granularity: Granularity) -> Double {
         let old = Double(previousTotals[granularity] ?? 0)
@@ -219,7 +224,7 @@ struct ToolSnapshot {
     let week: QuotaWindow
     /// A per-model allowance shown beneath the two windows, when configured.
     let modelQuota: QuotaWindow?
-    let usage: UsageSummary
+    var usage: UsageSummary
     let updatedAt: Date
     /// Available manual resets; nil when the account did not report a count.
     var remainingResets: Int? = nil
@@ -241,5 +246,100 @@ struct Dashboard {
 
     func snapshot(for tool: Tool) -> ToolSnapshot? {
         snapshots.first { $0.tool == tool }
+    }
+}
+
+/// Raw records retained for the custom period; daily totals remain the ledger's only history.
+struct UsageRangeSource {
+    let tool: Tool
+    let events: [UsageEvent]
+    let prices: PriceTable
+    let ledger: UsageLedger?
+}
+
+/// Inclusive local calendar dates. The exclusive boundary is the following midnight.
+struct UsageDateRange: Equatable {
+    let start: Date
+    let end: Date
+
+    init(start: Date, end: Date, today: Date = Date(), calendar: Calendar = .current) {
+        let last = calendar.startOfDay(for: today)
+        let a = min(calendar.startOfDay(for: start), last)
+        let b = min(calendar.startOfDay(for: end), last)
+        self.start = min(a, b)
+        self.end = max(a, b)
+    }
+
+    var isSingleDay: Bool { start == end }
+
+    func interval(calendar: Calendar = .current) -> Range<Date> {
+        start..<calendar.date(byAdding: .day, value: 1, to: end)!
+    }
+
+    func dayCount(calendar: Calendar = .current) -> Int {
+        (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1
+    }
+
+    func title(calendar: Calendar = .current) -> String {
+        let first = Self.dayKey(start, calendar: calendar).replacingOccurrences(of: "-", with: "/")
+        let last = Self.dayKey(end, calendar: calendar).replacingOccurrences(of: "-", with: "/")
+        return isSingleDay ? first : "\(first) – \(last)"
+    }
+
+    func storedDays(calendar: Calendar = .current) -> [String] {
+        [Self.dayKey(start, calendar: calendar), Self.dayKey(end, calendar: calendar)]
+    }
+
+    init?(storedDays: [String], today: Date = Date(), calendar: Calendar = .current) {
+        guard storedDays.count == 2,
+              let start = Self.date(storedDays[0], calendar: calendar),
+              let end = Self.date(storedDays[1], calendar: calendar) else { return nil }
+        self.init(start: start, end: end, today: today, calendar: calendar)
+    }
+
+    static func recent(_ days: Int, today: Date = Date(), calendar: Calendar = .current) -> Self {
+        let end = calendar.startOfDay(for: today)
+        return Self(start: calendar.date(byAdding: .day, value: 1 - days, to: end)!, end: end,
+                    today: today, calendar: calendar)
+    }
+
+    private static func dayKey(_ date: Date, calendar: Calendar = .current) -> String {
+        let c = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+
+    private static func date(_ key: String, calendar: Calendar) -> Date? {
+        let parts = key.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3,
+              let date = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])),
+              dayKey(date, calendar: calendar) == key else { return nil }
+        return date
+    }
+}
+
+/// A completed range starts again on the next click; the first click also permits a single day.
+struct UsageDateSelection {
+    private(set) var start: Date?
+    private(set) var end: Date?
+
+    init(range: UsageDateRange? = nil) {
+        start = range?.start
+        end = range?.end
+    }
+
+    mutating func select(_ date: Date, today: Date = Date(), calendar: Calendar = .current) {
+        let day = calendar.startOfDay(for: date)
+        guard day <= calendar.startOfDay(for: today) else { return }
+        if let first = start, end == nil {
+            start = min(first, day)
+            end = max(first, day)
+        } else {
+            start = day
+            end = nil
+        }
+    }
+
+    func range(today: Date = Date(), calendar: Calendar = .current) -> UsageDateRange? {
+        start.map { UsageDateRange(start: $0, end: end ?? $0, today: today, calendar: calendar) }
     }
 }

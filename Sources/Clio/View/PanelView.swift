@@ -15,7 +15,10 @@ struct PanelView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.panelIsOpen) private var panelIsOpen
     @Environment(\.isSnapshot) private var isSnapshot
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var granularity: Granularity = .day
+    @State private var isDatePickerPresented = false
+    @State private var customRange: UsageDateRange?
     @State private var basis: ShareBasis = .tokens
     @State private var didApplyInitial = false
 
@@ -76,6 +79,51 @@ struct PanelView: View {
             guard !didApplyInitial else { return }
             didApplyInitial = true
             granularity = initialGranularity
+            customRange = prefs.customUsageRange
+        }
+        .onChange(of: customRange) { _, range in prefs.customUsageRange = range }
+        .onChange(of: panelIsOpen) { _, open in if !open { isDatePickerPresented = false } }
+        .onExitCommand { isDatePickerPresented = false }
+        .overlayPreferenceValue(UsageDateAnchorKey.self) { anchor in
+            if isDatePickerPresented, let anchor {
+                GeometryReader { proxy in
+                    let rect = proxy[anchor]
+                    let left = min(max(12, rect.maxX - 248), proxy.size.width - 260)
+                    ZStack(alignment: .topLeading) {
+                        Color.clear.contentShape(Rectangle()).onTapGesture { isDatePickerPresented = false }
+                        VStack(spacing: 0) {
+                            Color.clear.frame(height: 6)
+                            UsageDatePopover(savedRange: customRange) { range in
+                                customRange = range
+                                granularity = .custom
+                                isDatePickerPresented = false
+                            } onCancel: {
+                                isDatePickerPresented = false
+                            }
+                        }
+                        .frame(width: 248)
+                        .background {
+                            let shape = UsageDatePopoverShape(arrowX: rect.midX - left)
+                            datePopoverBackground(shape)
+                                .overlay(shape.stroke(theme.cardStroke, lineWidth: 0.5))
+                                .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+                        }
+                        .offset(x: left, y: rect.maxY + 2)
+                        .environment(\.theme, theme)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func datePopoverBackground(_ shape: UsageDatePopoverShape) -> some View {
+        if reduceTransparency || isSnapshot {
+            shape.fill(theme.menuFill)
+        } else if #available(macOS 26, *) {
+            Color.clear.liquidGlass(true, in: shape)
+        } else {
+            shape.fill(.regularMaterial)
         }
     }
 
@@ -84,12 +132,21 @@ struct PanelView: View {
         let scope = dashboard.snapshots.count > 1 ? prefs.usageScope : .combined
         let parts = dashboard.snapshots.filter { scope.tool == nil || $0.tool == scope.tool }
         let usage = scope == .combined ? dashboard.combined : parts.first?.usage ?? .empty
+        let selectedParts = granularity == .custom && customRange != nil ? parts.map { part in
+            var selected = part
+            selected.usage = DashboardBuilder.selecting(part.usage, range: customRange!)
+            return selected
+        } : parts
+        let selectedUsage = granularity == .custom
+            ? DashboardBuilder.combined(selectedParts.map(\.usage), events: [], now: dashboard.updatedAt)
+            : usage
         VStack(spacing: 10) {
             VStack(spacing: 10) {
                 SubscriptionCard(snapshots: dashboard.snapshots)
-                UsageCard(usage: usage, parts: parts, granularity: $granularity)
+                UsageCard(usage: selectedUsage, parts: selectedParts, granularity: $granularity,
+                          customRange: $customRange, isDatePickerPresented: $isDatePickerPresented)
                 ActivityCards(activity: usage.activity, parts: parts)
-                ModelBreakdownCard(usage: usage, granularity: granularity, basis: $basis)
+                ModelBreakdownCard(usage: selectedUsage, granularity: granularity, basis: $basis)
                 HeatmapCard(dailyTokens: usage.dailyTokens, parts: parts)
             }
             .padding(.horizontal, 12)

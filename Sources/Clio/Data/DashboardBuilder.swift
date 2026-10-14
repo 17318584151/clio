@@ -51,19 +51,20 @@ enum DashboardBuilder {
         var buckets: [Granularity: [Bucket]] = [:]
         var models: [Granularity: [ModelUsage]] = [:]
 
-        for granularity in Granularity.allCases {
+        var unavailableDetails: Set<Granularity> = []
+        for granularity in Granularity.allCases where granularity != .custom {
             let current = range(for: granularity, containing: now, calendar: calendar)
             let previous = previousRange(current, granularity: granularity, calendar: calendar)
-            let inCurrent = sorted.filter { current.contains($0.timestamp) }
-
-            totals[granularity] = inCurrent.reduce(into: TokenCounts()) { $0 += $1.counts }
-            costs[granularity] = cost(of: inCurrent, prices: prices)
+            let selected = aggregate(sorted, tool: tool, prices: prices, ledger: ledger,
+                                     granularity: granularity, range: current, calendar: calendar)
+            totals[granularity] = selected.counts
+            costs[granularity] = selected.cost
             previousTotals[granularity] = ledger?.tokens(in: previous, calendar: calendar) ?? sorted
                 .filter { previous.contains($0.timestamp) }
                 .reduce(0) { $0 + $1.counts.total }
-            buckets[granularity] = bucket(inCurrent, tool: tool, granularity: granularity, range: current,
-                                          calendar: calendar)
-            models[granularity] = breakdown(inCurrent, prices: prices)
+            buckets[granularity] = selected.buckets
+            models[granularity] = selected.models
+            if !selected.hasDetails { unavailableDetails.insert(granularity) }
         }
 
         return UsageSummary(totals: totals,
@@ -72,7 +73,9 @@ enum DashboardBuilder {
                             buckets: buckets,
                             models: models,
                             dailyTokens: dailyTokens(sorted, ledger: ledger, now: now, calendar: calendar),
-                            activity: activity(sorted, now: now, calendar: calendar))
+                            activity: activity(sorted, now: now, calendar: calendar),
+                            unavailableDetails: unavailableDetails,
+                            rangeSource: UsageRangeSource(tool: tool, events: sorted, prices: prices, ledger: ledger))
     }
 
     /// The tools' usage added together. Active time is worked out again from
@@ -87,6 +90,7 @@ enum DashboardBuilder {
         var buckets: [Granularity: [Bucket]] = [:]
         var models: [Granularity: [ModelUsage]] = [:]
 
+        let unavailableDetails = parts.reduce(into: Set<Granularity>()) { $0.formUnion($1.unavailableDetails) }
         for granularity in Granularity.allCases {
             totals[granularity] = parts.reduce(into: TokenCounts()) { $0 += $1.totals[granularity] ?? TokenCounts() }
             previousTotals[granularity] = parts.reduce(0) { $0 + ($1.previousTotals[granularity] ?? 0) }
@@ -96,13 +100,14 @@ enum DashboardBuilder {
 
             // Every tool's chart covers the same period, so bars line up by position.
             let charts = parts.compactMap { $0.buckets[granularity] }
-            buckets[granularity] = charts.first.map { first in
+            let hasChart = charts.allSatisfy { $0.count == charts.first?.count }
+            buckets[granularity] = hasChart ? charts.first.map { first in
                 first.indices.map { index in
                     Bucket(id: first[index].id,
                            label: first[index].label,
                            byTool: charts.reduce(into: [:]) { $0.merge($1[index].byTool, uniquingKeysWith: +) })
                 }
-            }
+            } : []
 
             var merged: [String: ModelUsage] = [:]
             for model in parts.flatMap({ $0.models[granularity] ?? [] }) {
@@ -115,7 +120,7 @@ enum DashboardBuilder {
                                                  tokens: existing.tokens + model.tokens,
                                                  cost: existing.cost.flatMap { cost in model.cost.map { cost + $0 } })
             }
-            models[granularity] = merged.values.sorted { $0.tokens > $1.tokens }
+            models[granularity] = unavailableDetails.contains(granularity) ? [] : merged.values.sorted { $0.tokens > $1.tokens }
         }
 
         return UsageSummary(totals: totals,
@@ -124,7 +129,71 @@ enum DashboardBuilder {
                             buckets: buckets,
                             models: models,
                             dailyTokens: parts.reduce(into: [:]) { $0.merge($1.dailyTokens, uniquingKeysWith: +) },
-                            activity: activity(events, now: now, calendar: calendar))
+                            activity: activity(events, now: now, calendar: calendar),
+                            unavailableDetails: unavailableDetails)
+    }
+
+    /// Applies a custom range without changing today's activity or the heatmap.
+    static func selecting(_ usage: UsageSummary, range: UsageDateRange,
+                          calendar: Calendar = .current) -> UsageSummary {
+        let interval = range.interval(calendar: calendar)
+        let granularity: Granularity = range.isSingleDay ? .day : .custom
+        let selected: PeriodUsage
+        if let source = usage.rangeSource {
+            selected = aggregate(source.events, tool: source.tool, prices: source.prices, ledger: source.ledger,
+                                 granularity: granularity, range: interval, calendar: calendar)
+        } else {
+            let total = usage.dailyTokens.filter { interval.contains($0.key) }.values.reduce(0, +)
+            selected = PeriodUsage(counts: TokenCounts(reportedTotal: total), cost: nil, buckets: [],
+                                   models: [], hasDetails: false)
+        }
+        var totals = usage.totals
+        var costs = usage.costs
+        var buckets = usage.buckets
+        var models = usage.models
+        var unavailable = usage.unavailableDetails
+        totals[.custom] = selected.counts
+        costs[.custom] = selected.cost
+        buckets[.custom] = selected.buckets
+        models[.custom] = selected.models
+        if selected.hasDetails { unavailable.remove(.custom) } else { unavailable.insert(.custom) }
+        return UsageSummary(totals: totals, previousTotals: usage.previousTotals, costs: costs, buckets: buckets,
+                            models: models, dailyTokens: usage.dailyTokens, activity: usage.activity,
+                            unavailableDetails: unavailable, rangeSource: usage.rangeSource)
+    }
+
+    private struct PeriodUsage {
+        let counts: TokenCounts
+        let cost: Double?
+        let buckets: [Bucket]
+        let models: [ModelUsage]
+        let hasDetails: Bool
+    }
+
+    private static func aggregate(_ events: [UsageEvent], tool: Tool, prices: PriceTable, ledger: UsageLedger?,
+                                  granularity: Granularity, range: Range<Date>, calendar: Calendar) -> PeriodUsage {
+        let selected = events.filter { range.contains($0.timestamp) }
+        var scanned: [Date: Int] = [:]
+        for event in selected {
+            scanned[calendar.startOfDay(for: event.timestamp), default: 0] += event.counts.total
+        }
+        let stored = (ledger?.daily(from: range.lowerBound, calendar: calendar) ?? [:])
+            .filter { range.contains($0.key) }
+        let missing = stored.contains { $0.value > (scanned[$0.key] ?? 0) }
+        let daily = scanned.merging(stored, uniquingKeysWith: max)
+        var counts = selected.reduce(into: TokenCounts()) { $0 += $1.counts }
+        if missing { counts.reportedTotal = daily.values.reduce(0, +) }
+        let chart: [Bucket]
+        if granularity == .day {
+            chart = missing ? [] : bucket(selected, tool: tool, granularity: granularity, range: range, calendar: calendar)
+        } else {
+            chart = bucket([], tool: tool, granularity: granularity, range: range, calendar: calendar).map { bar in
+                let day = calendar.date(byAdding: .day, value: bar.id, to: range.lowerBound)!
+                return Bucket(id: bar.id, label: bar.label, byTool: [tool: daily[day] ?? 0])
+            }
+        }
+        return PeriodUsage(counts: counts, cost: missing ? nil : cost(of: selected, prices: prices), buckets: chart,
+                           models: missing ? [] : breakdown(selected, prices: prices), hasDetails: !missing)
     }
 
     // MARK: - Periods
@@ -133,7 +202,7 @@ enum DashboardBuilder {
         let component: Calendar.Component
         var periodCalendar = calendar
         switch granularity {
-        case .day: component = .day
+        case .day, .custom: component = .day
         case .week:
             component = .weekOfYear
             periodCalendar.firstWeekday = 2
@@ -154,7 +223,7 @@ enum DashboardBuilder {
     private static func previousRange(_ current: Range<Date>, granularity: Granularity, calendar: Calendar) -> Range<Date> {
         let component: Calendar.Component
         switch granularity {
-        case .day: component = .day
+        case .day, .custom: component = .day
         case .week: component = .weekOfYear
         case .month: component = .month
         case .recentWeek, .recentMonth:
@@ -194,7 +263,7 @@ enum DashboardBuilder {
             return totals.enumerated().map {
                 Bucket(id: $0.offset, label: String(format: "%02d", $0.offset), byTool: [tool: $0.element])
             }
-        case .week, .month, .recentWeek, .recentMonth:
+        case .week, .month, .recentWeek, .recentMonth, .custom:
             let start = calendar.startOfDay(for: range.lowerBound)
             let end = calendar.startOfDay(for: range.upperBound)
             let days = (calendar.dateComponents([.day], from: start, to: end).day ?? 0)

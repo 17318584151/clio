@@ -136,7 +136,7 @@ private struct SegmentFramesKey: PreferenceKey {
     }
 }
 
-private extension View {
+extension View {
     func segmentFrame(_ value: some Hashable) -> some View {
         background(GeometryReader { proxy in
             Color.clear.preference(key: SegmentFramesKey.self,
@@ -149,7 +149,7 @@ private extension View {
 /// segment. Drawn per segment instead, a thumb sliding across would pass over
 /// the labels of the segments before it. Pressing and dragging carries the
 /// thumb along; letting go selects the segment it ends nearest to.
-private struct SegmentTrack<Value: Hashable, Content: View>: View {
+struct SegmentTrack<Value: Hashable, Content: View>: View {
     @Environment(\.theme) private var theme
     @Environment(\.liquidGlass) private var glass
     @Binding var selection: Value

@@ -25,6 +25,20 @@ enum Format {
         }
     }
 
+    /// Compact headline total with the existing unit and precision.
+    static func usageHeadline(_ value: Int) -> String {
+        let text = compact(value)
+        let integer = text.prefix { $0.isNumber }
+        guard integer.count > 3 else { return text }
+        var digits = Array(integer)
+        var index = digits.count - 3
+        while index > 0 {
+            digits.insert(",", at: index)
+            index -= 3
+        }
+        return String(digits) + text.dropFirst(integer.count)
+    }
+
     /// Compact form with fewer decimals the larger the figure gets, so a
     /// value stays inside the five-column split instead of being elided.
     static func compactNarrow(_ value: Int) -> String {

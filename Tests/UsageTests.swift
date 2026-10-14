@@ -361,8 +361,9 @@ enum UsageTests {
         expect(snapshot.usage.dailyTokens[calendar.startOfDay(for: date(10, 12))] == 500,
                "the heatmap does not count recent usage twice")
         expect(snapshot.usage.previousTotals[.month] == 800, "previous-month comparisons include retained history")
-        expect(snapshot.usage.totals[.month]?.total == 500 && snapshot.usage.models[.month]?.first?.tokens == 500,
-               "selected-period totals and model details remain based on current deduplicated logs")
+        expect(snapshot.usage.totals[.month]?.total == 800 && snapshot.usage.models[.month]?.isEmpty == true
+               && snapshot.usage.costs[.month] == nil && snapshot.usage.unavailableDetails.contains(.month),
+               "selected-period total includes saved history while incomplete model and cost details stay unavailable")
         let empty = DashboardBuilder.snapshot(tool: .claudeCode, events: [], rejections: [], prices: prices,
             quota: .init(), ledger: ledger, now: fixtureNow, calendar: calendar)
         expect(empty.usage.dailyTokens == snapshot.usage.dailyTokens,
