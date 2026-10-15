@@ -11,6 +11,8 @@ final class ClaudeCodeReader {
         let event: UsageEvent
         let isSidechain: Bool
     }
+    private(set) var revision = 0
+
     private let scanner: LogScanner
     private var events: [String: Entry] = [:]
     private var exactKeys: [String: String] = [:]
@@ -32,6 +34,7 @@ final class ClaudeCodeReader {
 
     func refresh() -> (events: [UsageEvent], rejections: [QuotaRejection]) {
         if scanner.needsRebuild() {
+            revision += 1
             scanner.reset()
             events.removeAll()
             exactKeys.removeAll()
@@ -48,9 +51,11 @@ final class ClaudeCodeReader {
             else { return }
             ingest(object)
         }
+        let previousCount = events.count + rejections.count
         let cutoff = Date().addingTimeInterval(-LogScanner.retention)
         events = events.filter { $0.value.event.timestamp > cutoff }
         rejections = rejections.filter { $0.timestamp > cutoff }
+        if events.count + rejections.count != previousCount { revision += 1 }
         return (events.values.map(\.event), rejections)
     }
 
@@ -126,6 +131,7 @@ final class ClaudeCodeReader {
                 return
             }
         }
+        revision += 1
         events[key] = Entry(event: UsageEvent(timestamp: timestamp, model: model, counts: counts,
                                               dedupeKey: key, sessionID: sessionID),
                             isSidechain: isSidechain)

@@ -15,15 +15,17 @@ enum DashboardBuilder {
     /// Monday-first, matching the week the periods are cut on.
     static let weekdayNames = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
+    /// Cached usage must match the events, prices, ledger and local calendar day.
     static func snapshot(tool: Tool,
                          events: [UsageEvent],
                          rejections: [QuotaRejection],
                          prices: PriceTable,
                          quota: QuotaConfig,
                          ledger: UsageLedger? = nil,
+                         cachedUsage: UsageSummary? = nil,
                          now: Date = Date(),
                          calendar: Calendar = .current) -> ToolSnapshot {
-        let sorted = events.sorted { $0.timestamp < $1.timestamp }
+        let sorted = cachedUsage?.rangeSource?.events ?? events.sorted { $0.timestamp < $1.timestamp }
         let live = quota.rateLimits
 
         return ToolSnapshot(
@@ -33,7 +35,7 @@ enum DashboardBuilder {
                 ? fiveHourWindow(sorted, rejections: rejections, live: live?.fiveHour, now: now) : nil,
             week: weekWindow(sorted, live: live?.sevenDay, now: now, calendar: calendar),
             modelQuota: modelQuotaWindow(sorted, live: live, now: now, calendar: calendar),
-            usage: usage(tool: tool, sorted, prices: prices, ledger: ledger, now: now, calendar: calendar),
+            usage: cachedUsage ?? usage(tool: tool, sorted, prices: prices, ledger: ledger, now: now, calendar: calendar),
             updatedAt: now,
             remainingResets: quota.remainingResets
         )

@@ -44,6 +44,7 @@ bash Scripts/package.sh
 | 命令 | 验证范围 |
 | --- | --- |
 | `bash Scripts/test-usage-periods.sh` | 自然日周期和合并统计 |
+| `bash Scripts/test-refresh.sh` | 刷新请求合并、统计缓存失效、额度重置及日志变更 |
 | `bash Scripts/test-usage.sh` | 历史每日记录恢复、日志读取、双来源额度冲突、窗口重置、用量聚合及里程碑 |
 | `bash Scripts/test-codex-usage.sh` | Codex 额度与重置次数、登录状态、只读协议及超时 |
 | `bash Scripts/test-quota-ring.sh` | 菜单栏额度比例 |

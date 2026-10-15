@@ -21,6 +21,8 @@ final class CodexReader {
         var quota: RateLimitSnapshot?
     }
 
+    private(set) var revision = 0
+
     private let scanners: [LogScanner]
     private var events: [String: UsageEvent] = [:]
     /// Latest model named in each session file. Subagent sessions log a
@@ -51,6 +53,7 @@ final class CodexReader {
 
     func refresh(now: Date = Date()) -> Reading {
         if scanners.contains(where: { $0.needsRebuild() }) {
+            revision += 1
             scanners.forEach { $0.reset() }
             events.removeAll()
             models.removeAll()
@@ -70,8 +73,10 @@ final class CodexReader {
                 ingest(object, file: file)
             }
         }
+        let previousCount = events.count
         let cutoff = now.addingTimeInterval(-LogScanner.retention)
         events = events.filter { $0.value.timestamp > cutoff }
+        if events.count != previousCount { revision += 1 }
         return Reading(events: Array(events.values), quota: quota)
     }
 
@@ -139,6 +144,7 @@ final class CodexReader {
             String(counts.cacheWrite), String(last["reasoning_output_tokens"] ?? 0), String(counts.total),
         ].joined(separator: "|")
         guard events[key] == nil else { return }
+        revision += 1
         events[key] = UsageEvent(timestamp: timestamp,
                                  model: currentModel,
                                  counts: counts,

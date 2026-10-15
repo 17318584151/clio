@@ -5,10 +5,27 @@ import AppKit
 /// Owns both log readers off the main actor. Parsing runs here so the panel
 /// stays responsive while ~1 GiB of session logs is walked.
 actor LogReaders {
-    private let claude = ClaudeCodeReader()
-    private let codex = CodexReader()
+    private let claude: ClaudeCodeReader
+    private let codex: CodexReader
+
     private var codexQuota: RateLimitSnapshot?
     private var codexRemainingResets: Int?
+    private var parsed: Result?
+    private var cacheKey: UsageCacheKey?
+    private var cachedSnapshots: [ToolSnapshot] = []
+    private var cachedCombined = UsageSummary.empty
+
+    private struct UsageCacheKey: Equatable {
+        var claudeRevision: Int
+        var codexRevision: Int
+        var prices: PriceTable
+        var history: [Date: Int]
+        var claudeLedger: UsageLedger?
+        var codexLedger: UsageLedger?
+        var retentionDays: Int?
+        var day: Date
+        var calendar: Calendar
+    }
 
     struct Result: Sendable {
         var claudeEvents: [UsageEvent] = []
@@ -19,50 +36,61 @@ actor LogReaders {
         var codexAvailable = false
     }
 
+    init(claude: ClaudeCodeReader = ClaudeCodeReader(), codex: CodexReader = CodexReader()) {
+        self.claude = claude
+        self.codex = codex
+    }
+
     func refresh() -> Result {
         var result = Result()
         result.claudeAvailable = claude.isAvailable
         result.codexAvailable = codex.isAvailable
-        if result.claudeAvailable {
-            let parsed = claude.refresh()
-            result.claudeEvents = parsed.events
-            result.claudeRejections = parsed.rejections
-        }
-        if result.codexAvailable {
-            let parsed = codex.refresh()
-            result.codexEvents = parsed.events
-            result.codexQuota = parsed.quota
-        }
+        let claudeReading = claude.refresh()
+        result.claudeEvents = claudeReading.events
+        result.claudeRejections = claudeReading.rejections
+        let codexReading = codex.refresh()
+        result.codexEvents = codexReading.events
+        result.codexQuota = codexReading.quota
         return result
     }
 
-    /// Parses what is new, then builds the dashboard. Building walks every
-    /// event and takes a few hundred milliseconds, so it stays here too.
-    func dashboard(prices: PriceTable, quota: [Tool: DashboardBuilder.QuotaConfig], quotaMaxAge: TimeInterval) -> Dashboard {
-        let parsed = refresh()
+    /// Quota updates reuse parsed events; unchanged usage inputs reuse the summaries.
+    func dashboard(prices: PriceTable, quota: [Tool: DashboardBuilder.QuotaConfig], quotaMaxAge: TimeInterval,
+                   scanLogs: Bool = true, now: Date = Date(), calendar: Calendar = .current) -> Dashboard {
+        if scanLogs || parsed == nil { parsed = refresh() }
+        let parsed = parsed!
         let history = StatsCacheReader.dailyTokens()
-        let storedClaude = UsageLedger.load(for: .claudeCode)
-        let storedCodex = UsageLedger.load(for: .codex)
+        var storedClaude = UsageLedger.load(for: .claudeCode)
+        var storedCodex = UsageLedger.load(for: .codex)
+        let retentionDays = UsageLedger.retentionDays()
+        var key = UsageCacheKey(claudeRevision: claude.revision, codexRevision: codex.revision,
+                                prices: prices, history: history, claudeLedger: storedClaude,
+                                codexLedger: storedCodex, retentionDays: retentionDays,
+                                day: calendar.startOfDay(for: now), calendar: calendar)
+        let reuseUsage = key == cacheKey
 
         var snapshots: [ToolSnapshot] = []
         var events: [UsageEvent] = []
         if (parsed.claudeAvailable && !parsed.claudeEvents.isEmpty) || storedClaude?.days.isEmpty == false || !history.isEmpty {
-            let ledger = UsageLedger.updated(storedClaude, events: parsed.claudeEvents, history: history,
-                                             now: Date(), retentionDays: UsageLedger.retentionDays())
+            let ledger = (reuseUsage ? storedClaude : nil) ?? UsageLedger.updated(storedClaude, events: parsed.claudeEvents, history: history,
+                                             now: now, retentionDays: retentionDays, calendar: calendar)
             if ledger != storedClaude { ledger.save(for: .claudeCode) }
+            storedClaude = ledger
             snapshots.append(DashboardBuilder.snapshot(tool: .claudeCode,
                                                        events: parsed.claudeEvents,
                                                        rejections: parsed.claudeRejections,
                                                        prices: prices,
-                                                       quota: quota[.claudeCode] ?? .init(), ledger: ledger))
-            events += parsed.claudeEvents
+                                                       quota: quota[.claudeCode] ?? .init(), ledger: ledger,
+                                                       cachedUsage: reuseUsage ? cachedSnapshots.first { $0.tool == .claudeCode }?.usage : nil,
+                                                       now: now, calendar: calendar))
+            if !reuseUsage { events += parsed.claudeEvents }
         }
         if (parsed.codexAvailable && !parsed.codexEvents.isEmpty) || storedCodex?.days.isEmpty == false {
-            let ledger = UsageLedger.updated(storedCodex, events: parsed.codexEvents, history: [:],
-                                             now: Date(), retentionDays: Int(LogScanner.retention / 86400))
+            let ledger = (reuseUsage ? storedCodex : nil) ?? UsageLedger.updated(storedCodex, events: parsed.codexEvents, history: [:],
+                                             now: now, retentionDays: Int(LogScanner.retention / 86400), calendar: calendar)
             if ledger != storedCodex { ledger.save(for: .codex) }
+            storedCodex = ledger
             var config = quota[.codex] ?? .init()
-            let now = Date()
             let latest = RateLimitSnapshot.latest([config.rateLimits, parsed.codexQuota, codexQuota].compactMap { $0 },
                                                    now: now, maxAge: quotaMaxAge)
             let resetUsed = config.remainingResets.flatMap { count in codexRemainingResets.map { count < $0 } } ?? false
@@ -75,12 +103,41 @@ actor LogReaders {
                                                        events: parsed.codexEvents,
                                                        rejections: [],
                                                        prices: prices,
-                                                       quota: config, ledger: ledger))
-            events += parsed.codexEvents
+                                                       quota: config, ledger: ledger,
+                                                       cachedUsage: reuseUsage ? cachedSnapshots.first { $0.tool == .codex }?.usage : nil,
+                                                       now: now, calendar: calendar))
+            if !reuseUsage { events += parsed.codexEvents }
         }
-        return Dashboard(snapshots: snapshots,
-                         combined: DashboardBuilder.combined(snapshots.map(\.usage), events: events),
-                         updatedAt: Date())
+        if !reuseUsage {
+            cachedCombined = DashboardBuilder.combined(snapshots.map(\.usage), events: events, now: now, calendar: calendar)
+        }
+        cachedSnapshots = snapshots
+        key.claudeLedger = storedClaude
+        key.codexLedger = storedCodex
+        cacheKey = key
+        return Dashboard(snapshots: snapshots, combined: cachedCombined, updatedAt: now)
+    }
+}
+
+/// Main-actor requests share one worker; a pending log scan takes priority.
+struct RefreshRequests {
+    private var isRunning = false
+    private var pending: Bool?
+
+    mutating func request(scanLogs: Bool) -> Bool {
+        pending = (pending ?? false) || scanLogs
+        guard !isRunning else { return false }
+        isRunning = true
+        return true
+    }
+
+    mutating func next() -> Bool? {
+        guard let request = pending else {
+            isRunning = false
+            return nil
+        }
+        pending = nil
+        return request
     }
 }
 
@@ -101,6 +158,7 @@ final class UsageStore: ObservableObject {
     private let readers = LogReaders()
     private let prefs = Preferences.shared
     private var timer: Timer?
+    private var refreshRequests = RefreshRequests()
     private var probeInFlight = false
     private var claudeQuota: RateLimitSnapshot?
     private var codexReading: CodexUsageProbe.Reading?
@@ -146,7 +204,7 @@ final class UsageStore: ObservableObject {
     /// happens when the feed itself changed.
     private func refreshIfFeedChanged() async {
         guard RateLimitBridge.load()?.updatedAt != lastFeedUpdate else { return }
-        await refresh()
+        await refresh(scanLogs: false)
     }
 
     private func startTimer(_ interval: TimeInterval) {
@@ -159,8 +217,15 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    func refresh() async {
+    func refresh(scanLogs: Bool = true) async {
         guard !isPreview else { return }
+        guard refreshRequests.request(scanLogs: scanLogs) else { return }
+        while let scanLogs = refreshRequests.next() {
+            await performRefresh(scanLogs: scanLogs)
+        }
+    }
+
+    private func performRefresh(scanLogs: Bool) async {
         let prices = await PriceService.shared.table()
         let feed = RateLimitBridge.load()
         lastFeedUpdate = feed?.updatedAt
@@ -186,7 +251,7 @@ final class UsageStore: ObservableObject {
             )
         }
 
-        let built = await readers.dashboard(prices: prices, quota: quotaConfig, quotaMaxAge: maxAge)
+        let built = await readers.dashboard(prices: prices, quota: quotaConfig, quotaMaxAge: maxAge, scanLogs: scanLogs)
 
         priceOrigin = origin
         priceFetchedAt = fetchedAt
@@ -216,7 +281,7 @@ final class UsageStore: ObservableObject {
                 self.probeInFlight = false
                 // Claude's cache records the fetch time; the control response does not.
                 guard probed != nil else { return }
-                await self.refresh()
+                await self.refresh(scanLogs: false)
             }
         }
         if !codexProbeInFlight {
@@ -226,7 +291,7 @@ final class UsageStore: ObservableObject {
                 guard let self else { return }
                 self.codexReading = reading
                 self.codexProbeInFlight = false
-                await self.refresh()
+                await self.refresh(scanLogs: false)
             }
         }
     }
