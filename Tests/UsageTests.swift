@@ -33,6 +33,7 @@ enum UsageTests {
         try testCodexSpeed()
         try testCodexDelayedUsageBoundary()
         try testCodexDuplicateTiming()
+        try testCodexDuplicateTimingQuality()
         try testClaudeSpeed()
         try testClaudeTimingMetadata()
         try testCodexZeroUsageTiming()
@@ -49,7 +50,7 @@ enum UsageTests {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("36 usage regression scenarios passed")
+        print("37 usage regression scenarios passed")
     }
 
     private static func record(_ type: String, at seconds: Double, payload: [String: Any]) throws -> String {
@@ -195,6 +196,53 @@ enum UsageTests {
             ])
         _ = reader.refresh(now: now)
         expect(reader.revision == completedRevision, "equivalent timed copies do not invalidate cached usage")
+    }
+
+    private static func testCodexDuplicateTimingQuality() throws {
+        func lines(_ quality: Int, session: String) throws -> [String] {
+            var result = [
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"\(session)\"}}",
+                try record("turn_context", at: -100, payload: ["model": "gpt-priced"]),
+                try record("response_item", at: quality == 2 ? -90 : -80, payload: ["type": "function_call"]),
+            ]
+            if quality == 2 {
+                result.append(try record("token_usage_record", at: -90, payload: [
+                    "usage": ["input_tokens": 1000, "cached_input_tokens": 600, "output_tokens": 600],
+                ]))
+            }
+            if quality == 1 {
+                result.append(try record("response_item", at: -60, payload: ["type": "function_call_output"]))
+            }
+            result.append(try usage(-60, output: 600, total: 1600))
+            return result
+        }
+        for (first, second) in [(0, 2), (2, 0), (0, 1), (1, 2), (2, 1)] {
+            for incremental in [false, true] {
+                let base = try directories("timing-quality-\(first)-\(second)-\(incremental)")
+                _ = try log(base, "active", lines: lines(first, session: "original"))
+                let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
+                let initial = incremental ? reader.refresh(now: now).events.first : nil
+                let initialRevision = reader.revision
+                _ = try log(base, "archive", archived: true, lines: lines(second, session: "duplicate"))
+                let events = reader.refresh(now: now).events
+                let expected: TimeInterval = max(first, second) == 2 ? 10 : 20
+                expect(events.count == 1 && events.first?.estimatedDuration == expected,
+                    "duplicate timing chooses the strongest source in either scan order or incremental refresh")
+                expect(events.first?.counts.output == 600 && events.first?.counts.total == 1600
+                    && events.first?.sessionID == "original",
+                    "timing quality does not change counts or original session identity")
+                if incremental {
+                    expect(events.first?.timestamp == initial?.timestamp && events.first?.dedupeKey == initial?.dedupeKey,
+                        "timing quality preserves the original event identity")
+                    expect(second > first ? reader.revision > initialRevision : reader.revision == initialRevision,
+                        "only improved timing invalidates an incremental result")
+                }
+                let revision = reader.revision
+                _ = try log(base, "repeated", archived: true, lines: lines(0, session: "repeated"))
+                expect(reader.refresh(now: now).events.first?.estimatedDuration == expected && reader.revision == revision,
+                    "a repeated fallback cannot replace precise timing or invalidate cached usage")
+            }
+        }
     }
 
     private static func testClaudeSpeed() throws {
