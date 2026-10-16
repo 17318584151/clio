@@ -33,6 +33,8 @@ final class CodexReader {
     /// Latest `total_token_usage` seen in each session file.
     private var totals: [String: [String: Int]] = [:]
     private var timers: [String: RequestTimer] = [:]
+    private let sleepHistory: () -> SleepTimeline
+    private var sleeps = SleepTimeline()
 
     /// Standard response items put their timing fields before the body. Read
     /// that prefix without decoding tool output; other layouts use the full parser.
@@ -197,7 +199,7 @@ final class CodexReader {
             }
         }
 
-        mutating func finish(at date: Date, counts: [String: Int]) -> TimeInterval? {
+        mutating func finish(at date: Date, counts: [String: Int], sleeps: SleepTimeline) -> TimeInterval? {
             var end = date
             if let toolOutput, date.timeIntervalSince(toolOutput) <= 0.1, let output { end = output }
             if let record = usageRecord,
@@ -207,7 +209,7 @@ final class CodexReader {
             {
                 end = record.timestamp
             }
-            let seconds = OutputSpeed.estimatedDuration(from: start ?? boundary, to: end)
+            let seconds = sleeps.estimatedDuration(from: start ?? boundary, to: end)
             // A delayed usage notification must not displace a newer tool result
             // or the response's actual end as the next request's boundary.
             self = RequestTimer(boundary: max(boundary ?? end, end), lastFinish: date)
@@ -217,9 +219,11 @@ final class CodexReader {
 
     private var quota: RateLimitSnapshot?
 
-    init(root: URL = Tool.codex.logDirectory) {
+    init(root: URL = Tool.codex.logDirectory,
+         sleepHistory: @escaping () -> SleepTimeline = { SleepHistory.shared.snapshot() }) {
         scanners = [LogScanner(root: root),
                     LogScanner(root: root.deletingLastPathComponent().appending(path: "archived_sessions"))]
+        self.sleepHistory = sleepHistory
     }
 
     var isAvailable: Bool {
@@ -238,8 +242,9 @@ final class CodexReader {
         .map { Array($0.utf8) }
 
     func refresh(now: Date = Date()) -> Reading {
+        let currentSleeps = sleepHistory()
         let scans = scanners.map { $0.prepare() }
-        if scans.contains(where: { $0.needsRebuild }) {
+        if scans.contains(where: { $0.needsRebuild }) || currentSleeps != sleeps {
             revision += 1
             scanners.forEach { $0.reset() }
             events.removeAll()
@@ -249,6 +254,7 @@ final class CodexReader {
             timers.removeAll()
             quota = nil
         }
+        sleeps = currentSleeps
         for (scanner, scan) in zip(scanners, scans) {
             scanner.scan(scan) { file, line in
                 if let reading = ResponseHeader.read(line) {
@@ -328,7 +334,6 @@ final class CodexReader {
             return
         }
         if let total { totals[file] = total }
-        let duration = timers[file, default: RequestTimer()].finish(at: timestamp, counts: last)
 
         let input = last["input_tokens"] ?? 0
         let cached = min(input, last["cached_input_tokens"] ?? 0)
@@ -343,6 +348,7 @@ final class CodexReader {
         }
 
         guard counts.total > 0 else { return }
+        let duration = timers[file, default: RequestTimer()].finish(at: timestamp, counts: last, sleeps: sleeps)
         let key = [
             String(Int64(timestamp.timeIntervalSince1970 * 1000)), currentModel,
             String(counts.input), String(counts.output), String(counts.cacheRead),

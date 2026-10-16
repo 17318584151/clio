@@ -20,6 +20,8 @@ final class ClaudeCodeReader {
     private var sidechainRoutes: [String: [String]] = [:]
     private var rejections: [QuotaRejection] = []
     private var timings: [String: FileTiming] = [:]
+    private let sleepHistory: () -> SleepTimeline
+    private var sleeps = SleepTimeline()
 
     private func timing(for file: String) -> FileTiming {
         if let timing = timings[file] { return timing }
@@ -41,7 +43,7 @@ final class ClaudeCodeReader {
         var nodes: [String: Node] = [:]
         var messages: [String: Message] = [:]
 
-        func duration(_ object: [String: Any], at date: Date) -> TimeInterval? {
+        func duration(_ object: [String: Any], at date: Date, sleeps: SleepTimeline) -> TimeInterval? {
             let parent = object["parentUuid"] as? String
             if let id = object["uuid"] as? String {
                 nodes[id] = Node(
@@ -65,12 +67,14 @@ final class ClaudeCodeReader {
             guard let timing = messages[id], timing.hasFirstBlock,
                 message["stop_reason"] as? String != nil
             else { return nil }
-            return OutputSpeed.estimatedDuration(from: timing.start, to: date)
+            return sleeps.estimatedDuration(from: timing.start, to: date)
         }
     }
 
-    init(root: URL = Tool.claudeCode.logDirectory) {
+    init(root: URL = Tool.claudeCode.logDirectory,
+         sleepHistory: @escaping () -> SleepTimeline = { SleepHistory.shared.snapshot() }) {
         scanner = LogScanner(root: root)
+        self.sleepHistory = sleepHistory
     }
 
     var isAvailable: Bool { scanner.rootExists }
@@ -81,8 +85,9 @@ final class ClaudeCodeReader {
     private static let chainMarker = Array("\"uuid\"".utf8)
 
     func refresh() -> (events: [UsageEvent], rejections: [QuotaRejection]) {
+        let currentSleeps = sleepHistory()
         let scan = scanner.prepare()
-        if scan.needsRebuild {
+        if scan.needsRebuild || currentSleeps != sleeps {
             revision += 1
             scanner.reset()
             events.removeAll()
@@ -92,6 +97,7 @@ final class ClaudeCodeReader {
             rejections.removeAll()
             timings.removeAll()
         }
+        sleeps = currentSleeps
         scanner.scan(scan) { file, line in
             guard
                 ByteSearch.contains(line, Self.usageMarker)
@@ -116,7 +122,7 @@ final class ClaudeCodeReader {
         guard let stamp = object["timestamp"] as? String,
               let timestamp = ISO8601.date(from: stamp)
         else { return }
-        let duration = timing(for: file).duration(object, at: timestamp)
+        let duration = timing(for: file).duration(object, at: timestamp, sleeps: sleeps)
 
         if let quota = object["quotaLimits"] as? [String: Any],
            let resets = quota["resetsAt"] as? Double {
@@ -183,9 +189,12 @@ final class ClaudeCodeReader {
                 if isSidechain { return }
             } else if existing.event.counts.total > counts.total {
                 return
-            } else if existing.event.counts.total == counts.total,
-                (duration ?? 0) <= (existing.event.estimatedDuration ?? 0)
-            {
+            } else if existing.event.counts.total == counts.total {
+                guard (duration ?? 0) > (existing.event.estimatedDuration ?? 0) else { return }
+                var event = existing.event
+                event.estimatedDuration = duration
+                events[key] = Entry(event: event, isSidechain: existing.isSidechain)
+                revision += 1
                 return
             }
         }

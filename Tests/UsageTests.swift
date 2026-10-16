@@ -34,6 +34,11 @@ enum UsageTests {
         try testCodexDelayedUsageBoundary()
         try testCodexDuplicateTiming()
         try testClaudeSpeed()
+        try testClaudeTimingMetadata()
+        try testCodexZeroUsageTiming()
+        testSleepTimeline()
+        testSleepHistoryCache()
+        try testReaderSleepTiming()
         testSpeedAggregation()
         testModelOutputSpeed()
         try testCodexLargeResponseHeaders()
@@ -43,7 +48,7 @@ enum UsageTests {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("30 usage regression scenarios passed")
+        print("35 usage regression scenarios passed")
     }
 
     private static func record(_ type: String, at seconds: Double, payload: [String: Any]) throws -> String {
@@ -72,7 +77,7 @@ enum UsageTests {
                     ]),
                 try record("response_item", at: -70, payload: ["type": "function_call_output"]),
             ])
-        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         expect(reader.refresh(now: now).events.isEmpty, "timing lines alone cannot create usage")
         try append(usage(-70, output: 600, total: 1600), to: file)
         let first = reader.refresh(now: now).events
@@ -113,7 +118,7 @@ enum UsageTests {
                 try record("response_item", at: -85, payload: ["type": "function_call_output"]),
                 try usage(-80, output: 600, total: 1600),
             ])
-        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         expect(
             reader.refresh(now: now).events.first?.estimatedDuration == 10,
             "delayed usage still ends the first request at its matching usage record")
@@ -156,7 +161,7 @@ enum UsageTests {
             lines: [
                 #"{"type":"session_meta","payload":{"id":"original-session"}}"#, response,
             ])
-        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         let initial = reader.refresh(now: now).events
         expect(initial.count == 1 && initial[0].estimatedDuration == nil, "partial copy initially has no timing")
         let revision = reader.revision
@@ -220,7 +225,7 @@ enum UsageTests {
             try line("assistant", id: "b0", parent: "a", at: -95, output: 600),
         ]
         try Data((initial.joined(separator: "\n") + "\n").utf8).write(to: file)
-        let reader = ClaudeCodeReader(root: base)
+        let reader = ClaudeCodeReader(root: base, sleepHistory: { SleepTimeline() })
         expect(reader.refresh().events.first?.estimatedDuration == nil, "unfinished Claude output has no speed")
         let revision = reader.revision
         try append(line("assistant", id: "b1", parent: "b0", at: -90, output: 600, complete: true, block: 1), to: file)
@@ -240,6 +245,229 @@ enum UsageTests {
                 complete: true, block: 1) + "\n").utf8
         ).write(to: orphan)
         expect(reader.refresh().events.count == 1, "replayed blocks cannot duplicate Claude usage")
+    }
+
+    private static func testClaudeTimingMetadata() throws {
+        let base = root.appending(path: "claude-timing-metadata")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
+        let midnight = calendar.startOfDay(for: now)
+        let formatter = ISO8601DateFormatter()
+        func block(at date: Date, complete: Bool) throws -> String {
+            var message: [String: Any] = [
+                "id": "same-message", "model": complete ? "later-model" : "original-model",
+                "usage": ["input_tokens": 10, "output_tokens": 600],
+            ]
+            if complete { message["stop_reason"] = "end_turn" }
+            let object: [String: Any] = [
+                "type": "assistant", "timestamp": formatter.string(from: date),
+                "uuid": complete ? "final" : "first", "parentUuid": complete ? "first" : "user",
+                "requestId": "request", "sessionId": complete ? "later-session" : "original-session",
+                "apiBlockIndex": complete ? 1 : 0, "message": message,
+            ]
+            return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        }
+        let user: [String: Any] = [
+            "type": "user", "uuid": "user", "timestamp": formatter.string(from: midnight.addingTimeInterval(-10)),
+        ]
+        let file = base.appending(path: "session.jsonl")
+        let initial =
+            try String(decoding: JSONSerialization.data(withJSONObject: user), as: UTF8.self)
+            + "\n" + block(at: midnight.addingTimeInterval(-5), complete: false) + "\n"
+        try Data(initial.utf8).write(to: file)
+        let reader = ClaudeCodeReader(root: base, sleepHistory: { SleepTimeline() })
+        let first = reader.refresh().events
+        let ledger = UsageLedger.updated(
+            nil, events: first, history: [:], now: now, retentionDays: nil, calendar: calendar)
+        let revision = reader.revision
+        try append(block(at: midnight.addingTimeInterval(5), complete: true), to: file)
+        let enriched = reader.refresh().events
+        expect(enriched.count == 1 && enriched[0].estimatedDuration == 15, "Claude timing is enriched across midnight")
+        expect(
+            enriched.first?.timestamp == first.first?.timestamp && enriched.first?.model == first.first?.model
+                && enriched.first?.sessionID == first.first?.sessionID && enriched.first?.counts == first.first?.counts
+                && enriched.first?.dedupeKey == first.first?.dedupeKey,
+            "equal-count timing enrichment preserves every existing Claude event field")
+        let updated = UsageLedger.updated(
+            ledger, events: enriched, history: [:], now: now, retentionDays: nil, calendar: calendar)
+        expect(updated == ledger, "cross-midnight enrichment cannot add the same tokens to a second ledger day")
+        expect(reader.revision > revision, "preserving Claude metadata still invalidates cached speed")
+    }
+
+    private static func testCodexZeroUsageTiming() throws {
+        let base = try directories("codex-zero-timing")
+        let zero: [String: Any] = [
+            "type": "token_count",
+            "info": [
+                "last_token_usage": ["input_tokens": 0, "output_tokens": 0],
+                "total_token_usage": ["input_tokens": 0, "output_tokens": 0],
+            ],
+            "rate_limits": ["primary": ["used_percent": 20, "window_minutes": 300]],
+        ]
+        let file = try log(
+            base, "request",
+            lines: [
+                try record("turn_context", at: -100, payload: ["model": "gpt-priced"]),
+                try record("response_item", at: -95, payload: ["type": "reasoning"]),
+                try record("event_msg", at: -90, payload: zero),
+            ])
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
+        let empty = reader.refresh(now: now)
+        expect(empty.events.isEmpty && empty.quota?.fiveHour?.usedPercentage == 20, "zero snapshots still update quota")
+        try append(usage(-80, output: 600, total: 1600), to: file)
+        let result = reader.refresh(now: now).events
+        expect(
+            result.count == 1 && result[0].estimatedDuration == 20,
+            "zero usage cannot consume an observed request timer")
+        try append(record("event_msg", at: -75, payload: zero), to: file)
+        try append(record("response_item", at: -70, payload: ["type": "message", "role": "assistant"]), to: file)
+        try append(usage(-60, output: 600, total: 3200), to: file)
+        let next = reader.refresh(now: now).events.sorted { $0.timestamp < $1.timestamp }
+        expect(
+            next.count == 2 && next[1].estimatedDuration == 20,
+            "zero usage before output cannot shift the next boundary")
+    }
+
+    private static func testSleepTimeline() {
+        func date(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
+        let timeline = SleepTimeline([
+            DateInterval(start: date(60), end: date(80)),
+            DateInterval(start: date(10), end: date(30)),
+            DateInterval(start: date(20), end: date(40)),
+            DateInterval(start: date(10), end: date(30)),
+        ])
+        expect(timeline.intervals.count == 2, "duplicate and overlapping sleeps are merged")
+        expect(timeline.estimatedDuration(from: date(0), to: date(100)) == 50, "only overlapping sleep is subtracted")
+        expect(
+            timeline.estimatedDuration(from: date(25), to: date(70)) == 20, "partial sleeps at both edges are clipped")
+        expect(
+            timeline.estimatedDuration(from: date(40), to: date(60)) == 20,
+            "touching interval edges do not remove awake time")
+        expect(
+            timeline.estimatedDuration(from: date(12), to: date(20)) == nil,
+            "an entirely sleeping request has no timing")
+        expect(
+            timeline.estimatedDuration(from: nil, to: date(100)) == nil, "sleep history cannot invent a missing start")
+        expect(timeline.estimatedDuration(from: date(100), to: date(0)) == nil, "backwards requests remain invalid")
+        expect(
+            timeline.estimatedDuration(from: date(100), to: date(1000)) == 900,
+            "real slow requests without sleep remain eligible")
+        let longSleep = SleepTimeline([DateInterval(start: date(10), end: date(7200))])
+        expect(
+            longSleep.estimatedDuration(from: date(0), to: date(7210)) == 20,
+            "sleep is removed before the one-hour limit")
+        let parsed = SleepTimeline.parse(
+            """
+            2026-10-16 03:52:33 +0800 Sleep  Entering Sleep state due to 'Maintenance Sleep':TCPKeepAlive=active Using AC (Charge:100%) 972 secs
+            2026-10-16 04:08:45 +0800 DarkWake  DarkWake from Deep Idle Using AC 45 secs
+            2026-10-15 19:52:33 +0000 Sleep  Entering Sleep state due to 'Maintenance Sleep' Using AC 972 secs
+            2026-10-16 04:09:30 +0800 Sleep  Entering Sleep state due to 'Maintenance Sleep' Using AC
+            2026-10-16 04:09:30 +0800 Assertions  Entering Sleep state 999 secs
+            invalid timestamp Sleep Entering Sleep state 999 secs
+            """)
+        expect(
+            parsed.intervals.count == 1 && parsed.intervals[0].duration == 972,
+            "pmset parsing ignores wake, incomplete and unrelated records")
+        expect(
+            parsed.intervals.first?.start == ISO8601.date(from: "2026-10-15T19:52:33Z"),
+            "power timestamps preserve timezone and date boundaries")
+    }
+
+    private static func testSleepHistoryCache() {
+        var wall = now
+        var uptime: TimeInterval = 100
+        var reads = 0
+        let history = SleepHistory(
+            load: {
+                reads += 1
+                return ""
+            }, clock: { (wall, uptime) })
+        _ = history.snapshot()
+        wall.addTimeInterval(20)
+        uptime += 20
+        _ = history.snapshot()
+        expect(reads == 1, "awake refreshes reuse power history without starting another process")
+        wall.addTimeInterval(1000)
+        _ = history.snapshot()
+        expect(reads == 2, "sleep between scans reloads power history")
+        _ = history.snapshot()
+        expect(reads == 2, "readers share the refreshed power-history cache")
+        wall.addTimeInterval(-10)
+        uptime += 1
+        _ = history.snapshot()
+        expect(reads == 3, "wall-clock corrections invalidate the power-history cache")
+        var failures = 0
+        let unavailable = SleepHistory(
+            load: {
+                failures += 1
+                return nil
+            }, clock: { (wall, uptime) })
+        expect(unavailable.snapshot().intervals.isEmpty, "unavailable power history does not interrupt usage scanning")
+        _ = unavailable.snapshot()
+        expect(failures == 1, "unavailable power history does not spawn a command on every refresh")
+    }
+
+    private static func testReaderSleepTiming() throws {
+        let anchor = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970))
+        var sleeps = SleepTimeline()
+        let corrected = SleepTimeline([
+            DateInterval(start: anchor.addingTimeInterval(-90), end: anchor.addingTimeInterval(-20))
+        ])
+        let base = try directories("sleep-timing")
+        let lines = try [
+            record("turn_context", at: -100, payload: ["model": "gpt-priced"]),
+            record("response_item", at: -10, payload: ["type": "message", "role": "assistant"]),
+            usage(-10, output: 600, total: 1600),
+        ]
+        _ = try log(base, "request", lines: lines)
+        _ = try log(base, "copy", archived: true, lines: lines)
+        let codex = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { sleeps })
+        let initial = codex.refresh(now: now).events
+        expect(
+            initial.count == 1 && initial[0].estimatedDuration == 90,
+            "initial Codex timing can precede power-history completion")
+        let revision = codex.revision
+        sleeps = corrected
+        let updated = codex.refresh(now: now).events
+        expect(
+            updated.count == 1 && updated[0].estimatedDuration == 20,
+            "changed sleep history replays active and archived files without duplicates")
+        expect(
+            updated.first?.counts == initial.first?.counts && updated.first?.dedupeKey == initial.first?.dedupeKey,
+            "sleep correction preserves Codex tokens and identity")
+        expect(codex.revision > revision, "sleep-only corrections invalidate cached usage")
+        let stableRevision = codex.revision
+        _ = codex.refresh(now: now)
+        expect(codex.revision == stableRevision, "unchanged sleep history preserves incremental scanning")
+
+        let claudeRoot = base.appending(path: "claude")
+        try FileManager.default.createDirectory(at: claudeRoot, withIntermediateDirectories: true)
+        let formatter = ISO8601DateFormatter()
+        let user: [String: Any] = [
+            "type": "user", "uuid": "u", "timestamp": formatter.string(from: anchor.addingTimeInterval(-100)),
+        ]
+        let response: [String: Any] = [
+            "type": "assistant", "uuid": "a", "parentUuid": "u",
+            "timestamp": formatter.string(from: anchor.addingTimeInterval(-10)),
+            "message": [
+                "id": "m", "model": "claude", "stop_reason": "end_turn",
+                "usage": ["input_tokens": 10, "output_tokens": 600],
+            ],
+        ]
+        try
+            (JSONSerialization.data(withJSONObject: user) + Data([10])
+            + JSONSerialization.data(withJSONObject: response) + Data([10]))
+            .write(to: claudeRoot.appending(path: "request.jsonl"))
+        sleeps = SleepTimeline()
+        let claude = ClaudeCodeReader(root: claudeRoot, sleepHistory: { sleeps })
+        let before = claude.refresh().events
+        expect(before.first?.estimatedDuration == 90, "Claude retains its original parent-chain timing")
+        sleeps = corrected
+        let after = claude.refresh().events
+        expect(
+            after.first?.estimatedDuration == 20 && after.first?.timestamp == before.first?.timestamp,
+            "Claude subtracts the same sleep history without moving the event")
     }
 
     private static func testSpeedAggregation() {
@@ -406,7 +634,7 @@ enum UsageTests {
                         try usage(-70, output: 200, total: 2800),
                     ])
                 readings.append(
-                    CodexReader(root: base.appending(path: "sessions")).refresh(now: now)
+                    CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() }).refresh(now: now)
                         .events.sorted { $0.timestamp < $1.timestamp })
             }
             expect(readings.allSatisfy { $0.count == 2 }, "large response variant \(index) retains both requests")
@@ -552,7 +780,7 @@ enum UsageTests {
         let first = try usage(-60)
         _ = try log(base, "active", lines: [first])
         _ = try log(base, "archive", archived: true, lines: [first, try usage(-50, total: 2200)])
-        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         let events = reader.refresh(now: now).events
         expect(events.count == 2, "active and archived copies must be deduplicated")
         expect(reader.refresh(now: now).events.count == 2, "refresh must not repeat archived usage")
@@ -581,7 +809,7 @@ enum UsageTests {
         let file = base.appending(path: "sessions/events.jsonl.zst")
         try first.write(to: file)
         let fixtureNow = ISO8601.date(from: "2026-10-10T12:01:00Z")!
-        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         let initial = reader.refresh(now: fixtureNow).events
         expect(initial.count == 1 && initial[0].counts.total == 110, "compressed session usage is counted")
         expect(
@@ -620,7 +848,7 @@ enum UsageTests {
             reader.refresh(now: fixtureNow).events.count == 2,
             "moving compressed logs to archives preserves usage")
         expect(
-            CodexReader(root: base.appending(path: "sessions")).refresh(now: fixtureNow).events.count == 2,
+            CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() }).refresh(now: fixtureNow).events.count == 2,
             "a fresh reader imports compressed archived logs")
 
         var corrupt = first + second
@@ -641,14 +869,14 @@ enum UsageTests {
     private static func testArchiveMove() throws {
         let base = try directories("move")
         let file = try log(base, "moving", lines: [try usage(-60)])
-        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         expect(reader.refresh(now: now).events.count == 1, "initial active usage")
         let archived = base.appending(path: "archived_sessions/moving.jsonl")
         try FileManager.default.moveItem(at: file, to: archived)
         expect(reader.refresh(now: now).events.count == 1, "moving a log must not double its usage")
         try append(usage(-50, total: 2200), to: archived)
         expect(reader.refresh(now: now).events.count == 2, "new archived content must be read incrementally")
-        let restarted = CodexReader(root: base.appending(path: "sessions"))
+        let restarted = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         expect(restarted.refresh(now: now).events.count == 2, "restart must retain archived usage")
     }
 
@@ -656,7 +884,7 @@ enum UsageTests {
         let base = try directories("archive-only")
         try FileManager.default.removeItem(at: base.appending(path: "sessions"))
         _ = try log(base, "only", archived: true, lines: [try usage(-60)])
-        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         expect(reader.isAvailable, "archived logs alone must make Codex available")
         expect(reader.refresh(now: now).events.count == 1, "archived logs alone must be counted")
     }
@@ -664,7 +892,7 @@ enum UsageTests {
     private static func testUpgrade() throws {
         let base = try directories("upgrade")
         let file = try log(base, "upgrade", lines: [try usage(-60, plan: "plus", fiveHour: true)])
-        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         expect(reader.refresh(now: now).events.count == 1, "usage before a plan upgrade must be counted")
         try append(usage(-50, total: 2200), to: file)
         let result = reader.refresh(now: now)
@@ -681,7 +909,7 @@ enum UsageTests {
     private static func testCodexQuotaSources() throws {
         let base = try directories("quota-sources")
         let file = try log(base, "live", lines: [try usage(-60, fiveHour: true)])
-        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
         let initial = reader.refresh(now: now)
         expect(initial.quota?.fiveHour?.usedPercentage == 20, "local short-window quota is read")
         expect(initial.quota?.sevenDay?.usedPercentage == 10, "local weekly quota is read")
@@ -829,7 +1057,7 @@ enum UsageTests {
     private static func testCacheWrites() throws {
         let base = try directories("writes")
         _ = try log(base, "writes", lines: [try usage(-60, write: 200)])
-        let result = CodexReader(root: base.appending(path: "sessions")).refresh(now: now)
+        let result = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() }).refresh(now: now)
         let counts = result.events.first?.counts ?? TokenCounts()
         expect(counts.input == 200 && counts.cacheRead == 600 && counts.cacheWrite == 200,
                "input must separate cache reads and writes")
@@ -843,7 +1071,7 @@ enum UsageTests {
     private static func testLegacyUsage() throws {
         let base = try directories("legacy")
         _ = try log(base, "legacy", lines: [try usage(-60, write: nil)])
-        let counts = CodexReader(root: base.appending(path: "sessions")).refresh(now: now).events.first?.counts
+        let counts = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() }).refresh(now: now).events.first?.counts
         expect(counts?.input == 400 && counts?.cacheWrite == 0 && counts?.total == 1100,
                "older usage without a cache-write field must retain its total")
     }
