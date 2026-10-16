@@ -30,11 +30,467 @@ enum UsageTests {
         try testMilestonePersistence()
         testMilestonePeriods()
         testPerToolMilestones()
+        try testCodexSpeed()
+        try testCodexDelayedUsageBoundary()
+        try testCodexDuplicateTiming()
+        try testClaudeSpeed()
+        testSpeedAggregation()
+        testModelOutputSpeed()
+        try testCodexLargeResponseHeaders()
+        try testPreparedLogScans()
+        try testBufferedLogLines()
         guard failures == 0 else {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("21 usage regression scenarios passed")
+        print("30 usage regression scenarios passed")
+    }
+
+    private static func record(_ type: String, at seconds: Double, payload: [String: Any]) throws -> String {
+        let object: [String: Any] = [
+            "type": type,
+            "timestamp": ISO8601DateFormatter().string(from: now.addingTimeInterval(seconds)), "payload": payload,
+        ]
+        return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+    }
+
+    private static func testCodexSpeed() throws {
+        let base = try directories("speed-codex")
+        let file = try log(
+            base, "timed",
+            lines: [
+                try record("turn_context", at: -100, payload: ["model": "gpt-priced"]),
+                try record("response_item", at: -95, payload: ["type": "reasoning"]),
+                try record("response_item", at: -90, payload: ["type": "function_call"]),
+                try record(
+                    "token_usage_record", at: -90,
+                    payload: [
+                        "usage": [
+                            "input_tokens": 1000,
+                            "cached_input_tokens": 600, "output_tokens": 600,
+                        ]
+                    ]),
+                try record("response_item", at: -70, payload: ["type": "function_call_output"]),
+            ])
+        let reader = CodexReader(root: base.appending(path: "sessions"))
+        expect(reader.refresh(now: now).events.isEmpty, "timing lines alone cannot create usage")
+        try append(usage(-70, output: 600, total: 1600), to: file)
+        let first = reader.refresh(now: now).events
+        expect(
+            first.count == 1 && first[0].estimatedDuration == 10,
+            "Codex uses the matching response usage record and excludes tool execution across refreshes")
+        try append(usage(-69, output: 600, total: 1600), to: file)
+        try append(record("response_item", at: -60, payload: ["type": "message", "role": "assistant"]), to: file)
+        try append(usage(-50, output: 200, total: 2800), to: file)
+        let second = reader.refresh(now: now).events.sorted { $0.timestamp < $1.timestamp }
+        expect(
+            second.count == 2 && second[1].estimatedDuration == 20,
+            "duplicate quota snapshots cannot reset the request clock")
+        try append(record("event_msg", at: -40, payload: ["type": "turn_aborted"]), to: file)
+        try append(record("event_msg", at: -20, payload: ["type": "task_started"]), to: file)
+        try append(usage(-10, output: 400, total: 4200), to: file)
+        let third = reader.refresh(now: now).events.max { $0.timestamp < $1.timestamp }
+        expect(third?.estimatedDuration == 10, "an aborted request cannot carry its start into a new turn")
+        _ = try log(base, "untimed", lines: [try usage(-5, output: 999, total: 1999)])
+        let untimed = reader.refresh(now: now).events.first { $0.counts.output == 999 }
+        expect(untimed?.estimatedDuration == nil, "Codex files cannot borrow another file's timing")
+    }
+
+    private static func testCodexDelayedUsageBoundary() throws {
+        let base = try directories("speed-delayed-usage")
+        let file = try log(
+            base, "delayed",
+            lines: [
+                try record("turn_context", at: -100, payload: ["model": "gpt-priced"]),
+                try record("response_item", at: -90, payload: ["type": "function_call"]),
+                try record(
+                    "token_usage_record", at: -90,
+                    payload: [
+                        "usage": [
+                            "input_tokens": 1000, "cached_input_tokens": 600, "output_tokens": 600,
+                        ]
+                    ]),
+                try record("response_item", at: -85, payload: ["type": "function_call_output"]),
+                try usage(-80, output: 600, total: 1600),
+            ])
+        let reader = CodexReader(root: base.appending(path: "sessions"))
+        expect(
+            reader.refresh(now: now).events.first?.estimatedDuration == 10,
+            "delayed usage still ends the first request at its matching usage record")
+        try append(record("response_item", at: -75, payload: ["type": "message", "role": "assistant"]), to: file)
+        try append(usage(-70, output: 200, total: 2800), to: file)
+        let events = reader.refresh(now: now).events.sorted { $0.timestamp < $1.timestamp }
+        expect(
+            events.count == 2 && events[1].estimatedDuration == 15,
+            "delayed token_count cannot replace the next request's earlier tool-result boundary")
+        let speed = events.reduce(into: OutputSpeed()) { $0.include($1) }
+        expect(speed.tokensPerSecond == 32, "delayed usage preserves the duration-weighted output speed")
+
+        _ = try log(
+            base, "mismatched",
+            lines: [
+                try record("turn_context", at: -60, payload: ["model": "gpt-priced"]),
+                try record("response_item", at: -50, payload: ["type": "function_call"]),
+                try record(
+                    "token_usage_record", at: -50,
+                    payload: [
+                        "usage": [
+                            "input_tokens": 999, "cached_input_tokens": 0, "output_tokens": 999,
+                        ]
+                    ]),
+                try usage(-40, output: 600, total: 1600),
+                try record("response_item", at: -30, payload: ["type": "message", "role": "assistant"]),
+                try usage(-20, output: 200, total: 2800),
+            ])
+        let fallback = reader.refresh(now: now).events.filter { $0.timestamp > now.addingTimeInterval(-60) }
+        expect(
+            fallback.count == 2 && fallback.allSatisfy { $0.estimatedDuration == 20 },
+            "unmatched usage records retain token_count as the fallback boundary")
+    }
+
+    private static func testCodexDuplicateTiming() throws {
+        let base = try directories("speed-duplicate-timing")
+        let response = try usage(-60, output: 600, total: 1600)
+        _ = try log(
+            base, "partial",
+            lines: [
+                #"{"type":"session_meta","payload":{"id":"original-session"}}"#, response,
+            ])
+        let reader = CodexReader(root: base.appending(path: "sessions"))
+        let initial = reader.refresh(now: now).events
+        expect(initial.count == 1 && initial[0].estimatedDuration == nil, "partial copy initially has no timing")
+        let revision = reader.revision
+        _ = try log(
+            base, "complete", archived: true,
+            lines: [
+                #"{"type":"session_meta","payload":{"id":"archived-copy"}}"#,
+                try record("turn_context", at: -70, payload: ["model": "gpt-priced"]), response,
+            ])
+        let completed = reader.refresh(now: now).events
+        expect(
+            completed.count == 1 && completed[0].estimatedDuration == 10,
+            "a complete archived copy fills missing request timing without adding another event")
+        expect(
+            completed.first?.counts == initial.first?.counts
+                && completed.first?.sessionID == "original-session"
+                && completed.first?.dedupeKey == initial.first?.dedupeKey,
+            "timing enrichment preserves existing tokens and request identity")
+        expect(reader.revision > revision, "timing enrichment invalidates cached usage even with unchanged event count")
+        let completedRevision = reader.revision
+        _ = try log(base, "another-partial", lines: [response])
+        let repeated = reader.refresh(now: now).events
+        expect(
+            repeated.count == 1 && repeated[0].estimatedDuration == 10 && reader.revision == completedRevision,
+            "an incomplete duplicate cannot erase timing or invalidate the cache")
+        _ = try log(
+            base, "another-complete", archived: true,
+            lines: [
+                try record("turn_context", at: -70, payload: ["model": "gpt-priced"]), response,
+            ])
+        _ = reader.refresh(now: now)
+        expect(reader.revision == completedRevision, "equivalent timed copies do not invalidate cached usage")
+    }
+
+    private static func testClaudeSpeed() throws {
+        let base = root.appending(path: "speed-claude")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let file = base.appending(path: "session.jsonl")
+        func line(
+            _ kind: String, id: String, parent: String?, at seconds: Double,
+            output: Int? = nil, complete: Bool = false, block: Int = 0
+        ) throws -> String {
+            var object: [String: Any] = [
+                "type": kind, "uuid": id, "sessionId": "s",
+                "timestamp": ISO8601DateFormatter().string(from: now.addingTimeInterval(seconds)),
+            ]
+            object["parentUuid"] = parent
+            if let output {
+                var message: [String: Any] = [
+                    "id": "m", "model": "claude", "usage": ["input_tokens": 10, "output_tokens": output],
+                ]
+                if complete { message["stop_reason"] = "end_turn" }
+                object["message"] = message
+                object["apiBlockIndex"] = block
+            }
+            return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        }
+        let initial = [
+            try line("user", id: "u", parent: nil, at: -100),
+            try line("attachment", id: "a", parent: "u", at: -98),
+            try line("assistant", id: "b0", parent: "a", at: -95, output: 600),
+        ]
+        try Data((initial.joined(separator: "\n") + "\n").utf8).write(to: file)
+        let reader = ClaudeCodeReader(root: base)
+        expect(reader.refresh().events.first?.estimatedDuration == nil, "unfinished Claude output has no speed")
+        let revision = reader.revision
+        try append(line("assistant", id: "b1", parent: "b0", at: -90, output: 600, complete: true, block: 1), to: file)
+        let completed = reader.refresh().events
+        expect(
+            completed.count == 1 && completed[0].estimatedDuration == 10,
+            "Claude follows the first block's parent across attachments and refreshes")
+        expect(reader.revision > revision, "completion with unchanged token counts invalidates cached speed")
+        try append(line("assistant", id: "b2", parent: "b1", at: -88, output: 600, complete: true, block: 2), to: file)
+        expect(
+            reader.refresh().events.first?.estimatedDuration == 12,
+            "later blocks extend duration without duplicating tokens")
+        let orphan = base.appending(path: "orphan.jsonl")
+        try Data(
+            (try line(
+                "assistant", id: "orphan", parent: "u", at: -80, output: 600,
+                complete: true, block: 1) + "\n").utf8
+        ).write(to: orphan)
+        expect(reader.refresh().events.count == 1, "replayed blocks cannot duplicate Claude usage")
+    }
+
+    private static func testSpeedAggregation() {
+        expect(
+            ISO8601.date(from: "2026-10-15T12:34:56.789Z") == ISO8601.date(from: "2026-10-15T20:34:56.789+08:00"),
+            "timestamp parsing preserves timezone offsets")
+        expect(
+            ISO8601.date(from: "2026-10-15T12:34:56Z") != nil
+                && ISO8601.date(from: "2026-10-15T12:34:56.123456Z") != nil
+                && ISO8601.date(from: "invalid") == nil,
+            "timestamp parsing handles whole seconds, fractions and invalid records")
+        let calendar = Calendar.current
+        let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: now)!
+        func event(_ tokens: Int, _ seconds: Double?, at date: Date? = nil) -> UsageEvent {
+            UsageEvent(
+                timestamp: date ?? noon, model: "gpt-priced", counts: TokenCounts(output: tokens),
+                dedupeKey: UUID().uuidString, estimatedDuration: seconds)
+        }
+        let today = [
+            event(1000, 10), event(200, 20), event(199, 1), event(500, 0.5),
+            event(500, nil), event(500, 3601), event(500, -1), event(500, .nan),
+        ]
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: noon)!
+        let events = today + [event(600, 10, at: yesterday)]
+        let summary = DashboardBuilder.snapshot(
+            tool: .codex, events: events, rejections: [], prices: prices,
+            quota: .init(), now: noon, calendar: calendar
+        ).usage
+        expect(
+            summary.outputSpeeds[.day]?.tokensPerSecond == 40 && summary.outputSpeeds[.day]?.samples == 2,
+            "speed uses summed output / summed duration, excluding tiny, missing and implausible samples")
+        expect(summary.outputSpeeds[.recentWeek]?.tokensPerSecond == 45, "speed follows the selected period")
+        let custom = DashboardBuilder.selecting(
+            summary,
+            range: UsageDateRange(
+                start: yesterday, end: yesterday,
+                today: noon, calendar: calendar), calendar: calendar)
+        expect(
+            custom.outputSpeeds[.custom]?.tokensPerSecond == 60, "custom dates recalculate speed from their own events")
+        var other = UsageSummary.empty
+        other.outputSpeeds[.day] = OutputSpeed(outputTokens: 600, duration: 10, samples: 1)
+        let combined = DashboardBuilder.combined([summary, other], events: events, now: noon, calendar: calendar)
+        expect(combined.outputSpeeds[.day]?.tokensPerSecond == 45, "combined speed weights each tool by timed duration")
+        expect(
+            UsageSummary.empty.outputSpeeds[.day]?.tokensPerSecond == nil, "missing samples cannot display zero speed")
+        var limit = OutputSpeed()
+        limit.include(event(200, 1))
+        limit.include(event(200, 3600))
+        expect(limit.samples == 2, "output and duration thresholds are inclusive")
+        let components = calendar.dateComponents([.year, .month, .day], from: noon)
+        let dayKey = String(format: "%04d-%02d-%02d", components.year!, components.month!, components.day!)
+        let ledger = UsageLedger(days: [dayKey: 1_000_000])
+        let partial = DashboardBuilder.snapshot(
+            tool: .codex, events: events, rejections: [], prices: prices,
+            quota: .init(), ledger: ledger, now: noon, calendar: calendar
+        ).usage
+        expect(
+            partial.outputSpeeds[.day]?.tokensPerSecond == nil, "daily totals without raw details cannot invent speed")
+        let incomplete = DashboardBuilder.combined([summary, partial], events: events, now: noon, calendar: calendar)
+        expect(
+            incomplete.models[.day]?.isEmpty == true && incomplete.outputSpeeds[.day]?.tokensPerSecond == nil,
+            "combined usage with missing history cannot report another tool's speed as its overall speed")
+    }
+
+    private static func testModelOutputSpeed() {
+        let calendar = Calendar.current
+        let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: now)!
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: noon)!
+        func event(_ model: String, _ tokens: Int, _ duration: Double?, at date: Date? = nil) -> UsageEvent {
+            UsageEvent(
+                timestamp: date ?? noon, model: model, counts: TokenCounts(output: tokens),
+                dedupeKey: UUID().uuidString, estimatedDuration: duration)
+        }
+        let events = [
+            event("gpt-priced", 1000, 10), event("gpt-priced", 200, 20),
+            event("gpt-priced", 199, 1), event("slow", 900, 30), event("slow", 1000, nil),
+            event("untimed", 600, nil), event("gpt-priced", 600, 10, at: yesterday),
+        ]
+        let codex = DashboardBuilder.snapshot(
+            tool: .codex, events: events, rejections: [], prices: prices,
+            quota: .init(), now: noon, calendar: calendar
+        ).usage
+        let models = codex.models[.day] ?? []
+        expect(
+            models.first { $0.model == "gpt-priced" }?.outputSpeed.tokensPerSecond == 40,
+            "each model uses only its eligible output and duration")
+        expect(
+            models.first { $0.model == "slow" }?.outputSpeed.tokensPerSecond == 30,
+            "other models and untimed responses do not dilute a model's speed")
+        expect(
+            models.first { $0.model == "untimed" }?.outputSpeed.tokensPerSecond == nil,
+            "a model without timing remains visible with unavailable speed")
+        let otherEvents = [event("gpt-priced", 600, 10)]
+        let claude = DashboardBuilder.snapshot(
+            tool: .claudeCode, events: otherEvents, rejections: [], prices: prices,
+            quota: .init(), now: noon, calendar: calendar
+        ).usage
+        let combined = DashboardBuilder.combined(
+            [codex, claude], events: events + otherEvents, now: noon, calendar: calendar)
+        let merged = combined.models[.day]?.first { $0.model == "gpt-priced" }
+        expect(
+            merged?.outputSpeed.tokensPerSecond == 45 && merged?.outputSpeed.samples == 3,
+            "the same model across tools merges sample totals rather than averaging speeds")
+        let custom = DashboardBuilder.selecting(
+            codex,
+            range: UsageDateRange(
+                start: yesterday, end: yesterday,
+                today: noon, calendar: calendar), calendar: calendar)
+        expect(
+            custom.models[.custom]?.count == 1 && custom.models[.custom]?.first?.outputSpeed.tokensPerSecond == 60,
+            "custom dates recompute model speeds from the selected requests")
+        expect(
+            claude.models[.day]?.first?.outputSpeed.tokensPerSecond == 60,
+            "a single tool keeps its own model speed after combined aggregation")
+    }
+
+    private static func testCodexLargeResponseHeaders() throws {
+        let body = try String(
+            decoding: JSONEncoder().encode(
+                String(
+                    repeating:
+                        "工具输出 🧪 \\\"type\\\":\\\"token_count\\\" response_item model text\n", count: 200)),
+            as: UTF8.self)
+        let variants = [
+            "{\"type\":\"function_call\",\"id\":null,\"arguments\":\(body)}",
+            "{\"type\":\"custom_tool_call\",\"id\":null,\"input\":\(body)}",
+            "{\"type\":\"reasoning\",\"id\":null,\"summary\":[{\"text\":\(body)}]}",
+            "{\"type\":\"message\",\"id\":null,\"role\":\"assistant\",\"content\":[{\"text\":\(body)}]}",
+            "{\"type\":\"message\",\"content\":[{\"text\":\(body)}],\"role\":\"assistant\"}",
+            "{\"content\":[{\"text\":\(body)}],\"type\":\"message\",\"role\":\"assistant\"}",
+            "{\"type\":\"message\",\"role\":\"assis\\u0074ant\",\"content\":[{\"text\":\(body)}]}",
+            "{\"type\":\"function_call\",\"arguments\":\(body),\"model\":\"gpt-other\"}",
+            "{\"metadata\":{\"values\":[1,2,3]},\"type\":\"function_call\",\"arguments\":\(body)}",
+        ]
+        func envelope(_ payload: String, at seconds: Double, reordered: Bool, type: String = "response_item") throws
+            -> String
+        {
+            let stamp = ISO8601DateFormatter().string(from: now.addingTimeInterval(seconds))
+            if reordered {
+                return "{\"payload\":\(payload),\"type\":\"\(type)\",\"timestamp\":\"\(stamp)\"}"
+            }
+            return
+                "{ \"timestamp\" : \"\(stamp)\", \"ordinal\": 7, \"type\" : \"\(type)\", \"payload\":\(payload)}"
+        }
+        for (index, payload) in variants.enumerated() {
+            var readings: [[UsageEvent]] = []
+            for reordered in [false, true] {
+                let base = try directories("large-header-\(index)-\(reordered)")
+                let tool = "{\"type\":\"custom_tool_call_output\",\"id\":null,\"call_id\":\"tool\",\"output\":\(body)}"
+                let extraModel = index == 0 ? ",\"model\":\"gpt-event\"" : ""
+                let ignored = "{\"type\":\"agent_message\",\"message\":\(body)\(extraModel)}"
+                let started = "{\"type\":\"task_started\",\"message\":\(body)}"
+                _ = try log(
+                    base, "response",
+                    lines: [
+                        #"{"type":"session_meta","payload":{"id":"header-fixture"}}"#,
+                        try record("turn_context", at: -110, payload: ["model": "gpt-priced"]),
+                        try envelope(started, at: -100, reordered: reordered, type: "event_msg"),
+                        try envelope(ignored, at: -96, reordered: reordered, type: "event_msg"),
+                        try envelope(payload, at: -90, reordered: reordered),
+                        try usage(-90, output: 600, total: 1600),
+                        try envelope(tool, at: -80, reordered: reordered),
+                        try record("response_item", at: -70, payload: ["type": "message", "role": "assistant"]),
+                        try usage(-70, output: 200, total: 2800),
+                    ])
+                readings.append(
+                    CodexReader(root: base.appending(path: "sessions")).refresh(now: now)
+                        .events.sorted { $0.timestamp < $1.timestamp })
+            }
+            expect(readings.allSatisfy { $0.count == 2 }, "large response variant \(index) retains both requests")
+            for (fast, fallback) in zip(readings[0], readings[1]) {
+                expect(
+                    fast.counts == fallback.counts && fast.model == fallback.model
+                        && fast.timestamp == fallback.timestamp && fast.sessionID == fallback.sessionID
+                        && fast.dedupeKey == fallback.dedupeKey && fast.estimatedDuration == fallback.estimatedDuration,
+                    "large response variant \(index) agrees across envelope layouts")
+                expect(fast.estimatedDuration == 10, "large response bodies cannot override timing metadata")
+            }
+            if index == 7 {
+                expect(
+                    readings[0].allSatisfy { $0.model == "gpt-other" },
+                    "model changes after a large body remain visible")
+            }
+            if index == 0 {
+                expect(
+                    readings[0].allSatisfy { $0.model == "gpt-event" },
+                    "event models after a large message retain the original attribution")
+            }
+        }
+    }
+
+    private static func testPreparedLogScans() throws {
+        let base = try directories("prepared-scans").appending(path: "sessions")
+        let file = base.appending(path: "events.jsonl")
+        try Data("first\npar".utf8).write(to: file)
+        let scanner = LogScanner(root: base)
+        var lines: [String] = []
+        let first = scanner.prepare()
+        expect(!first.needsRebuild, "a new scanner needs no rebuild")
+        expect(
+            scanner.scan(first) { _, line in lines.append(String(decoding: line, as: UTF8.self)) } == 1
+                && lines == ["first"], "prepared scans consume only complete lines")
+        let unchanged = scanner.prepare()
+        expect(
+            !unchanged.needsRebuild && scanner.scan(unchanged) { _, _ in } == 0,
+            "unchanged files skip content reads")
+        try append("tial", to: file)
+        lines.removeAll()
+        let appended = scanner.prepare()
+        expect(!appended.needsRebuild, "appending to a file preserves incremental state")
+        scanner.scan(appended) { _, line in lines.append(String(decoding: line, as: UTF8.self)) }
+        expect(lines == ["partial"], "incremental reads retain a previously incomplete suffix")
+        try Data("replacement\nextra\n".utf8).write(to: file, options: .atomic)
+        let replaced = scanner.prepare()
+        expect(replaced.needsRebuild, "atomic replacement invalidates a prepared scan")
+        scanner.reset()
+        lines.removeAll()
+        scanner.scan(replaced) { _, line in lines.append(String(decoding: line, as: UTF8.self)) }
+        expect(lines == ["replacement", "extra"], "the same metadata snapshot replays a replacement after reset")
+        try FileManager.default.removeItem(at: file)
+        let deleted = scanner.prepare()
+        expect(deleted.needsRebuild, "deleted files remain detectable in the single metadata walk")
+        scanner.reset()
+        expect(scanner.scan(deleted) { _, _ in } == 0, "deleted files cannot replay stale content")
+    }
+
+    private static func testBufferedLogLines() throws {
+        let base = try directories("buffered-lines")
+        let logs = base.appending(path: "sessions")
+        let file = logs.appending(path: "chunks.jsonl")
+        let first = Data(repeating: 0x61, count: 256 * 1024 - 1)
+        let second = Data(String(repeating: "中🧪", count: 150_000).utf8)
+        let tail = Data(repeating: 0x62, count: 256 * 1024 + 11)
+        try (first + Data([10, 10]) + second + Data([10]) + tail).write(to: file)
+        let scanner = LogScanner(root: logs)
+        let prepared = scanner.prepare()
+        let hidden = base.appending(path: "temporarily-unavailable")
+        try FileManager.default.moveItem(at: file, to: hidden)
+        var lines: [Data] = []
+        scanner.scan(prepared) { _, line in lines.append(Data(line)) }
+        expect(lines.isEmpty, "a temporarily unavailable file emits no partial records")
+        try FileManager.default.moveItem(at: hidden, to: file)
+        let restored = scanner.prepare()
+        expect(!restored.needsRebuild, "restoring the same file retains metadata and incremental state")
+        scanner.scan(restored) { _, line in lines.append(Data(line)) }
+        expect(lines == [first, second], "reads retry and preserve UTF-8 lines across several buffer boundaries")
+        try append("尾", to: file)
+        lines.removeAll()
+        scanner.scan { _, line in lines.append(Data(line)) }
+        expect(lines == [tail + Data("尾".utf8)], "a large incomplete trailing line is resumed exactly once")
+        expect(scanner.scan { _, _ in } == 0, "unchanged buffered logs do not read file contents again")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

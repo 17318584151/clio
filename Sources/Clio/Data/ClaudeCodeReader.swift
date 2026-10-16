@@ -19,6 +19,55 @@ final class ClaudeCodeReader {
     private var replayRoutes: [String: [String]] = [:]
     private var sidechainRoutes: [String: [String]] = [:]
     private var rejections: [QuotaRejection] = []
+    private var timings: [String: FileTiming] = [:]
+
+    private func timing(for file: String) -> FileTiming {
+        if let timing = timings[file] { return timing }
+        let timing = FileTiming()
+        timings[file] = timing
+        return timing
+    }
+
+    private final class FileTiming {
+        struct Node {
+            let parent: String?
+            let timestamp: Date
+            let isAttachment: Bool
+        }
+        struct Message {
+            let start: Date?
+            let hasFirstBlock: Bool
+        }
+        var nodes: [String: Node] = [:]
+        var messages: [String: Message] = [:]
+
+        func duration(_ object: [String: Any], at date: Date) -> TimeInterval? {
+            let parent = object["parentUuid"] as? String
+            if let id = object["uuid"] as? String {
+                nodes[id] = Node(
+                    parent: parent, timestamp: date,
+                    isAttachment: object["type"] as? String == "attachment")
+            }
+            guard object["type"] as? String == "assistant",
+                let message = object["message"] as? [String: Any],
+                let id = message["id"] as? String
+            else { return nil }
+            if messages[id] == nil {
+                var cursor = parent
+                var start: Date?
+                for _ in 0..<32 {
+                    guard let key = cursor, let node = nodes[key] else { break }
+                    if !node.isAttachment { start = node.timestamp; break }
+                    cursor = node.parent
+                }
+                messages[id] = Message(start: start, hasFirstBlock: (object["apiBlockIndex"] as? Int ?? 0) == 0)
+            }
+            guard let timing = messages[id], timing.hasFirstBlock,
+                message["stop_reason"] as? String != nil
+            else { return nil }
+            return OutputSpeed.estimatedDuration(from: timing.start, to: date)
+        }
+    }
 
     init(root: URL = Tool.claudeCode.logDirectory) {
         scanner = LogScanner(root: root)
@@ -26,14 +75,14 @@ final class ClaudeCodeReader {
 
     var isAvailable: Bool { scanner.rootExists }
 
-    /// Byte markers used to skip lines that cannot carry usage before paying
-    /// for a JSON parse. Most lines in a session log are prompts, tool results
-    /// and attachments.
+    /// Keep usage, quota and parent-chain records; unrelated metadata is skipped.
     private static let usageMarker = Array("\"usage\"".utf8)
     private static let quotaMarker = Array("\"quotaLimits\"".utf8)
+    private static let chainMarker = Array("\"uuid\"".utf8)
 
     func refresh() -> (events: [UsageEvent], rejections: [QuotaRejection]) {
-        if scanner.needsRebuild() {
+        let scan = scanner.prepare()
+        if scan.needsRebuild {
             revision += 1
             scanner.reset()
             events.removeAll()
@@ -41,15 +90,19 @@ final class ClaudeCodeReader {
             replayRoutes.removeAll()
             sidechainRoutes.removeAll()
             rejections.removeAll()
+            timings.removeAll()
         }
-        scanner.scan { _, line in
-            guard ByteSearch.contains(line, Self.usageMarker)
-                    || ByteSearch.contains(line, Self.quotaMarker) else { return }
+        scanner.scan(scan) { file, line in
+            guard
+                ByteSearch.contains(line, Self.usageMarker)
+                    || ByteSearch.contains(line, Self.quotaMarker)
+                    || ByteSearch.contains(line, Self.chainMarker)
+            else { return }
             guard let base = line.baseAddress else { return }
             let data = Data(bytes: base, count: line.count)
             guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
-            ingest(object)
+            ingest(object, file: file)
         }
         let previousCount = events.count + rejections.count
         let cutoff = Date().addingTimeInterval(-LogScanner.retention)
@@ -59,10 +112,11 @@ final class ClaudeCodeReader {
         return (events.values.map(\.event), rejections)
     }
 
-    private func ingest(_ object: [String: Any]) {
+    private func ingest(_ object: [String: Any], file: String) {
         guard let stamp = object["timestamp"] as? String,
               let timestamp = ISO8601.date(from: stamp)
         else { return }
+        let duration = timing(for: file).duration(object, at: timestamp)
 
         if let quota = object["quotaLimits"] as? [String: Any],
            let resets = quota["resetsAt"] as? Double {
@@ -127,31 +181,28 @@ final class ClaudeCodeReader {
         if let existing = events[key] {
             if existing.isSidechain != isSidechain {
                 if isSidechain { return }
-            } else if existing.event.counts.total >= counts.total {
+            } else if existing.event.counts.total > counts.total {
+                return
+            } else if existing.event.counts.total == counts.total,
+                (duration ?? 0) <= (existing.event.estimatedDuration ?? 0)
+            {
                 return
             }
         }
         revision += 1
-        events[key] = Entry(event: UsageEvent(timestamp: timestamp, model: model, counts: counts,
-                                              dedupeKey: key, sessionID: sessionID),
-                            isSidechain: isSidechain)
+        events[key] = Entry(
+            event: UsageEvent(timestamp: timestamp, model: model, counts: counts,
+                              dedupeKey: key, sessionID: sessionID, estimatedDuration: duration),
+            isSidechain: isSidechain)
     }
 }
 
 enum ISO8601 {
-    private static let withFraction: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-
-    private static let plain: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
+    // FormatStyle avoids DateFormatter's per-line overhead during full log scans.
+    private static let withFraction = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let plain = Date.ISO8601FormatStyle()
 
     static func date(from string: String) -> Date? {
-        withFraction.date(from: string) ?? plain.date(from: string)
+        (try? withFraction.parse(string)) ?? (try? plain.parse(string))
     }
 }

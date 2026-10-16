@@ -31,6 +31,7 @@ enum RefreshTests {
         expect(requests.next() == false && requests.next() == nil, "next batch drains")
         try await dashboard(root)
         try await codexQuota(root)
+        try await codexTimingEnrichment(root)
         print("Refresh regression checks passed")
     }
 
@@ -72,6 +73,53 @@ enum RefreshTests {
         try FileManager.default.removeItem(at: file)
         _ = await readers.dashboard(prices: .builtin, quota: [:], quotaMaxAge: 600, now: now)
         expect(reader.revision > revision, "Codex deletion invalidates cache")
+    }
+
+    static func codexTimingEnrichment(_ root: URL) async throws {
+        StatsCacheReader.history = [:]
+        for name in ["daily-tokens.json", "codex-daily-tokens.json"] {
+            try FileManager.default.removeItem(at: root.appending(path: name))
+        }
+        let now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(12 * 3600)
+        let base = root.appending(path: "codex-timing")
+        let logs = base.appending(path: "sessions")
+        let archived = base.appending(path: "archived_sessions")
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+        let stamp = ISO8601DateFormatter().string(from: now.addingTimeInterval(-60))
+        let usage: [String: Any] = [
+            "type": "event_msg", "timestamp": stamp,
+            "payload": [
+                "type": "token_count", "info": ["last_token_usage": ["input_tokens": 1000, "output_tokens": 600]],
+            ],
+        ]
+        let response = try JSONSerialization.data(withJSONObject: usage) + Data([10])
+        let model = Data("{\"type\":\"turn_context\",\"payload\":{\"model\":\"test\"}}\n".utf8)
+        try (model + response).write(to: logs.appending(path: "partial.jsonl"))
+        let reader = CodexReader(root: logs)
+        let readers = LogReaders(claude: ClaudeCodeReader(root: base.appending(path: "absent")), codex: reader)
+        let first = await readers.dashboard(prices: .builtin, quota: [:], quotaMaxAge: 600, now: now)
+        expect(first.combined.models[.day]?.first?.outputSpeed.tokensPerSecond == nil, "initial model has no timing")
+        let context: [String: Any] = [
+            "type": "turn_context",
+            "timestamp": ISO8601DateFormatter().string(from: now.addingTimeInterval(-70)), "payload": ["model": "test"],
+        ]
+        try (JSONSerialization.data(withJSONObject: context) + Data([10]) + response)
+            .write(to: archived.appending(path: "complete.jsonl"))
+        let cached = await readers.dashboard(prices: .builtin, quota: [:], quotaMaxAge: 600, scanLogs: false, now: now)
+        expect(
+            cached.combined.models[.day]?.first?.outputSpeed.tokensPerSecond == nil,
+            "quota-only updates retain cached timing until the next log scan")
+        let updated = await readers.dashboard(prices: .builtin, quota: [:], quotaMaxAge: 600, now: now)
+        expect(
+            updated.combined.models[.day]?.first?.outputSpeed.tokensPerSecond == 60,
+            "timing-only enrichment rebuilds cached model speeds")
+        expect(
+            updated.combined.totals == first.combined.totals,
+            "timing-only enrichment never increases cached token totals")
+        expect(
+            updated.snapshot(for: .codex)?.usage.models[.day]?.first?.outputSpeed.samples == 1,
+            "per-tool and combined model speeds share the enriched request")
     }
 
     static func dashboard(_ root: URL) async throws {
