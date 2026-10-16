@@ -41,6 +41,7 @@ enum UsageTests {
         try testReaderSleepTiming()
         testSpeedAggregation()
         testModelOutputSpeed()
+        testOutputSpeedFormatting()
         try testCodexLargeResponseHeaders()
         try testPreparedLogScans()
         try testBufferedLogLines()
@@ -48,7 +49,7 @@ enum UsageTests {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("35 usage regression scenarios passed")
+        print("36 usage regression scenarios passed")
     }
 
     private static func record(_ type: String, at seconds: Double, payload: [String: Any]) throws -> String {
@@ -530,6 +531,22 @@ enum UsageTests {
         expect(
             incomplete.models[.day]?.isEmpty == true && incomplete.outputSpeeds[.day]?.tokensPerSecond == nil,
             "combined usage with missing history cannot report another tool's speed as its overall speed")
+    }
+
+    private static func testOutputSpeedFormatting() {
+        func speed(_ tokens: Int, _ seconds: Double) -> OutputSpeed {
+            var result = OutputSpeed()
+            result.include(UsageEvent(
+                timestamp: now, model: "slow", counts: TokenCounts(output: tokens),
+                dedupeKey: UUID().uuidString, estimatedDuration: seconds))
+            return result
+        }
+        expect(Format.outputSpeed(speed(200, 500)) == "≈ 0.4 tok/s", "slow valid output does not round to zero")
+        expect(Format.outputSpeed(speed(200, 3600)) == "≈ 0.056 tok/s", "minimum eligible rate retains precision")
+        expect(Format.outputSpeed(speed(200, 250)) == "≈ 0.8 tok/s", "sub-token rates retain their fractional value")
+        expect(Format.outputSpeed(speed(200, 200)) == "≈ 1 tok/s", "one-token rate keeps integer formatting")
+        expect(Format.outputSpeed(speed(604, 10)) == "≈ 60 tok/s", "ordinary output retains integer formatting")
+        expect(Format.outputSpeed(OutputSpeed()) == "—", "missing samples remain unavailable")
     }
 
     private static func testModelOutputSpeed() {
