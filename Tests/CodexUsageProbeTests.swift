@@ -40,7 +40,8 @@ enum CodexUsageProbeTests {
             let audit = root.appending(path: "\(scenario).jsonl")
             let code = """
             #!/usr/bin/python3
-            import json, signal, sys, time
+            import json, os, signal, sys, time
+            assert os.environ['CODEX_HOME'] == '\(root.path)'
             scenario = '\(scenario)'
             audit = '\(audit.path)'
             if scenario == 'eof':
@@ -77,7 +78,7 @@ enum CodexUsageProbeTests {
             try code.write(to: script, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
             let started = Date()
-            let result = CodexUsageProbe.fetch(executable: script, timeout: scenario == "timeout" ? 0.3 : 3)
+            let result = CodexUsageProbe.fetch(executable: script, timeout: scenario == "timeout" ? 0.3 : 3, configDirectory: root)
             precondition(Date().timeIntervalSince(started) < 4)
             if scenario == "success" {
                 precondition(result?.remainingResets == 0 && result?.quota?.sevenDay?.usedPercentage == 30)

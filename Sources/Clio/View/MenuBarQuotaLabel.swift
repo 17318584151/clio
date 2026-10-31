@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Remaining quota: Claude on the outer ring, Codex on the inner ring.
+/// Used quota: Claude on the outer ring, Codex on the inner ring.
 struct MenuBarQuotaLabel: View {
     var claudeFraction: Double?
     var codexFraction: Double?
@@ -13,8 +13,8 @@ struct MenuBarQuotaLabel: View {
         isDark ? Color(hex: 0xF5F5F7) : Color(hex: 0x1D1D1F)
     }
 
-    static func remainingPercent(_ usedFraction: Double?) -> Int? {
-        usedFraction.map { Int(((1 - min(1, max(0, $0))) * 100).rounded()) }
+    static func usedPercent(_ usedFraction: Double?) -> Int? {
+        usedFraction.map { Int((min(1, max(0, $0)) * 100).rounded()) }
     }
 
     var body: some View {
@@ -51,9 +51,9 @@ struct MenuBarQuotaLabel: View {
                 .stroke(foreground.opacity(0.22), lineWidth: 1.5)
             if let usedFraction {
                 Circle()
-                    .trim(from: 0, to: 1 - min(1, max(0, usedFraction)))
+                    .trim(from: 0, to: min(1, max(0, usedFraction)))
                     // Flat endpoints keep the visible arc within its quota proportion.
-                    .stroke(color(for: Self.remainingPercent(usedFraction)),
+                    .stroke(color(for: Self.usedPercent(usedFraction)),
                             style: StrokeStyle(lineWidth: 1.5, lineCap: .butt))
                     .rotationEffect(.degrees(-90))
             }
@@ -63,17 +63,17 @@ struct MenuBarQuotaLabel: View {
     }
 
     private func percentage(_ usedFraction: Double?) -> some View {
-        let remaining = Self.remainingPercent(usedFraction)
-        return Text(remaining.map { "\($0)%" } ?? "—")
-            .foregroundStyle(color(for: remaining))
+        let used = Self.usedPercent(usedFraction)
+        return Text(used.map { "\($0)%" } ?? "—")
+            .foregroundStyle(color(for: used))
             .fixedSize()
     }
 
-    private func color(for remaining: Int?) -> Color {
-        guard let remaining else { return foreground.opacity(0.5) }
-        if remaining <= 25 { return Color(hex: 0xFF453A) }
-        if remaining <= 50 { return Color(hex: 0xFF9F0A) }
-        if remaining <= 75 { return Color(hex: 0xFFD60A) }
+    private func color(for used: Int?) -> Color {
+        guard let used else { return foreground.opacity(0.5) }
+        if used >= 75 { return Color(hex: 0xFF453A) }
+        if used >= 50 { return Color(hex: 0xFF9F0A) }
+        if used >= 25 { return Color(hex: 0xFFD60A) }
         return foreground
     }
 }

@@ -104,7 +104,7 @@ private struct QuotaRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Text(window.title)
+                Text("\(window.title)已用")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(theme.textPrimary)
                 Spacer(minLength: 8)

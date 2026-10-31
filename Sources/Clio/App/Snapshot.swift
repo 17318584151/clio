@@ -20,23 +20,23 @@ enum Snapshot {
         }
 
         let sampleOnly = CommandLine.arguments.contains("--sample-only")
-        let store = sampleOnly ? UsageStore.preview(DesignSample.dashboard()) : UsageStore()
+        let store = sampleOnly ? UsageStore.preview(DesignSample.dashboard(), accounts: DesignSample.accounts()) : UsageStore()
         let prefs = Preferences.shared
 
         Task {
             if !sampleOnly {
                 await PriceService.shared.refreshIfNeeded()
                 await store.refresh()
-                // The quota probe answers after the first build; wait for it so the
-                // rendered panel carries percentages rather than bare token counts.
                 store.probeNow()
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                if store.isQueryingQuota {
+                    try? await Task.sleep(nanoseconds: 6_000_000_000)
+                }
                 await CodexHelper.shared.refresh()
             }
 
             for scheme in [ColorScheme.light, .dark] {
                 let name = scheme == .light ? "light" : "dark"
-                write(PanelView(onOpenSettings: {})
+                writeNative(PanelView(onOpenSettings: {})
                         .environmentObject(store)
                         .environmentObject(prefs)
                         .environment(\.colorScheme, scheme)
@@ -59,7 +59,7 @@ enum Snapshot {
                       to: folder.appending(path: "empty-\(name).png"))
             }
 
-            write(PanelView(onOpenSettings: {}, initialGranularity: .week)
+            writeNative(PanelView(onOpenSettings: {}, initialGranularity: .week)
                     .environmentObject(store)
                     .environmentObject(prefs)
                     .environment(\.colorScheme, .light)
@@ -86,7 +86,7 @@ enum Snapshot {
             for scheme in [ColorScheme.light, .dark] {
                 let name = scheme == .light ? "light" : "dark"
                 write(PanelView(onOpenSettings: {})
-                        .environmentObject(UsageStore.preview(DesignSample.dashboard()))
+                        .environmentObject(UsageStore.preview(DesignSample.dashboard(), accounts: DesignSample.accounts()))
                         .environmentObject(prefs)
                         .environment(\.colorScheme, scheme)
                         .background(backdrop(scheme)),

@@ -24,7 +24,7 @@ enum CodexUsageProbe {
     }
 
     static func fetch(executable: URL? = CodexUsageProbe.executable,
-                      timeout: TimeInterval = 20) -> Reading? {
+                      timeout: TimeInterval = 20, configDirectory: URL? = nil) -> Reading? {
         guard let executable else { return nil }
         let process = Process()
         process.executableURL = executable
@@ -33,6 +33,7 @@ enum CodexUsageProbe {
         var environment = ProcessInfo.processInfo.environment
         environment["HOME"] = NSHomeDirectory()
         environment["USER"] = NSUserName()
+        if let configDirectory { environment["CODEX_HOME"] = configDirectory.path }
         environment["PATH"] = (environment["PATH"] ?? "/usr/bin:/bin") + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         environment.merge(UsageProbe.systemProxyEnvironment()) { current, _ in current }
         process.environment = environment

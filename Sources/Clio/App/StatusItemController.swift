@@ -104,7 +104,7 @@ final class StatusItemController {
     private func quotaTooltip(_ dashboard: Dashboard) -> String {
         [Tool.claudeCode, .codex].map { tool in
             guard let snapshot = dashboard.snapshot(for: tool) else {
-                return "\(tool.displayName)：暂无额度数据"
+                return "\(tool.displayName)（系统默认账号）：暂无额度数据"
             }
             let windows: [QuotaWindow]
             if let fiveHour = snapshot.fiveHour {
@@ -113,15 +113,15 @@ final class StatusItemController {
                 windows = [snapshot.week]
             }
             let lines = windows.map { window in
-                let remaining = MenuBarQuotaLabel.remainingPercent(window.fraction)
+                let used = MenuBarQuotaLabel.usedPercent(window.fraction)
                     .map { "\($0)%" } ?? "—"
-                var line = "\(window.title)剩余 \(remaining)"
+                var line = "\(window.title)已用 \(used)"
                 if let reset = window.resetsAt {
                     line += "\n重置：\(reset.formatted(date: .abbreviated, time: .shortened))"
                 }
                 return line
             }
-            return "\(tool.displayName) · " + lines.joined(separator: "\n")
+            return "\(tool.displayName)（系统默认账号） · " + lines.joined(separator: "\n")
         }.joined(separator: "\n\n")
     }
 }

@@ -2,18 +2,22 @@ import Foundation
 
 /// Reads the quota state Claude Code caches in `~/.claude.json`.
 ///
-/// `cachedUsageUtilization` holds the same payload the CLI answers a
-/// `get_usage` request with, plus the time it was fetched, and Claude Code
-/// refreshes it while it runs. Reading the file costs nothing, so it is the
-/// first source tried; the CLI is asked only on the slower schedule.
+/// `cachedUsageUtilization` holds the quota payload and its fetch time.
+/// Claude Code refreshes it during normal use and when `/usage` runs.
+/// Reading the file costs nothing, so it is the
+/// first source tried; the CLI is asked only when the cache is missing or stale.
 enum ClaudeConfigReader {
-    private static var path: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude.json")
-    }
-
-    static func read() -> RateLimitSnapshot? {
+    static func read(path: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude.json")) -> RateLimitSnapshot? {
         guard let data = try? Data(contentsOf: path) else { return nil }
         return parse(data)
+    }
+
+    static func isFresh(_ quota: RateLimitSnapshot?, maxAge: TimeInterval, now: Date = Date()) -> Bool {
+        guard let quota else { return false }
+        let age = now.timeIntervalSince(quota.updatedAt)
+        let windows = [quota.fiveHour, quota.sevenDay].compactMap { $0 }
+        return age >= 0 && age < maxAge && !windows.isEmpty
+            && windows.allSatisfy { $0.usedPercentage != nil && $0.isCurrent(at: now) }
     }
 
     /// Split from the file read so a payload can be checked on its own.
@@ -23,6 +27,10 @@ enum ClaudeConfigReader {
               let utilization = cached["utilization"] as? [String: Any],
               let fetched = cached["fetchedAtMs"] as? Double
         else { return nil }
+
+        if let account = root["oauthAccount"] as? [String: Any],
+           let current = account["accountUuid"] as? String,
+           cached["accountUuid"] as? String != current { return nil }
 
         var snapshot = RateLimitBridge.snapshot(from: utilization)
         snapshot.updatedAt = Date(timeIntervalSince1970: fetched / 1000)

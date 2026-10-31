@@ -144,30 +144,120 @@ struct RefreshRequests {
 /// Owns the readers, the refresh timer, and the current dashboard.
 @MainActor
 final class UsageStore: ObservableObject {
+    @Published private(set) var accountQuotas: [AccountQuota] = []
+    @Published var accountDirectoryError: String?
+    @Published private var accountQueryInFlight = false
+    private var lastAccountQueries: [String: Date] = [:]
+    private var lastDefaultQueries: [Tool: Date] = [:]
+    private let accountQuery: @Sendable (QuotaAccount, TimeInterval, Bool) -> AccountQuota
+    private let claudeQuery: @Sendable (TimeInterval) -> RateLimitSnapshot?
+    private let codexQuery: @Sendable () -> CodexUsageProbe.Reading?
+    private var extraAccountDirectories: [String] {
+        UserDefaults.standard.stringArray(forKey: "accountDirectories") ?? []
+    }
+
+    func addAccountDirectory(_ directory: URL) {
+        guard QuotaAccount.read(directory: directory) != nil else {
+            accountDirectoryError = "该目录中未找到 Claude Code 或 Codex 的账号信息。请选择对应的配置目录。"
+            return
+        }
+        let paths = Array(Set(extraAccountDirectories + [directory.standardizedFileURL.resolvingSymlinksInPath().path])).sorted()
+        UserDefaults.standard.set(paths, forKey: "accountDirectories")
+        accountDirectoryError = nil
+        refreshAccounts(force: true)
+    }
+
+    func isCustomAccount(_ account: QuotaAccount) -> Bool {
+        extraAccountDirectories.contains(account.directory.path)
+    }
+
+    func removeAccountDirectory(_ account: QuotaAccount) {
+        UserDefaults.standard.set(extraAccountDirectories.filter { $0 != account.directory.path }, forKey: "accountDirectories")
+        accountQuotas.removeAll { $0.account == account }
+        lastAccountQueries.removeAll()
+        refreshAccounts(force: true)
+    }
+
+    func refreshAccounts(force: Bool = false, manual: Bool = false) {
+        guard !isPreview, !accountQueryInFlight else { return }
+        let accounts = QuotaAccount.discover(extraDirectories: extraAccountDirectories)
+        let maxAge = prefs.quotaInterval
+        let now = Date()
+        accountQuotas = accounts.map { account in
+            let previous = accountQuotas.first { $0.account == account }
+            guard account.tool == .claudeCode else { return previous ?? AccountQuota.cached(account) }
+            var local = AccountQuota.cached(account)
+            if prefs.automaticClaudeQuotaQueries, previous?.status == "查询失败",
+               !ClaudeConfigReader.isFresh(local.quota, maxAge: maxAge, now: now) {
+                local.quota = nil
+                local.status = "查询失败"
+            }
+            if !manual, !prefs.automaticClaudeQuotaQueries { local.status = "仅本地缓存" }
+            return local
+        }
+        let pending = accountQuotas.filter { reading in
+            if !manual, reading.account.tool == .claudeCode {
+                guard prefs.automaticClaudeQuotaQueries else { return false }
+                if ClaudeConfigReader.isFresh(reading.quota, maxAge: maxAge, now: now) { return false }
+            }
+            let interval = prefs.queryInterval(for: reading.account.tool)
+            return force || lastAccountQueries[reading.id].map { now.timeIntervalSince($0) >= interval } ?? true
+        }
+        guard !pending.isEmpty else { return }
+        accountQueryInFlight = true
+        let query = accountQuery
+        Task { [weak self] in
+            for item in pending {
+                guard let self else { break }
+                let account = item.account
+                if !manual, account.tool == .claudeCode, !self.prefs.automaticClaudeQuotaQueries { continue }
+                let maxAge = self.prefs.queryInterval(for: account.tool)
+                self.lastAccountQueries[account.id] = Date()
+                let reading = await Task.detached(priority: .utility) { query(account, maxAge, manual) }.value
+                if let index = self.accountQuotas.firstIndex(where: { $0.account == account }) {
+                    self.accountQuotas[index] = reading
+                }
+                if account.isDefault, account.tool == .codex {
+                    self.codexReading = .init(quota: reading.quota, plan: reading.plan, remainingResets: reading.remainingResets)
+                }
+                await self.refresh(scanLogs: false)
+            }
+            self?.accountQueryInFlight = false
+        }
+    }
     @Published private(set) var dashboard = Dashboard(snapshots: [], combined: .empty, updatedAt: .distantPast)
     @Published private(set) var isLoading = true
     @Published private(set) var priceOrigin: PriceOrigin = .builtin
     /// When the price table was last read from models.dev.
     @Published private(set) var priceFetchedAt: Date?
-    @Published private(set) var lastQuotaQuery: Date?
 
     /// Raised when a 100M milestone is crossed; the celebration window observes it.
     let milestoneReached = PassthroughSubject<Void, Never>()
 
     private var isPreview = false
-    private let readers = LogReaders()
+    private let readers: LogReaders
     private let prefs = Preferences.shared
     private var timer: Timer?
     private var refreshRequests = RefreshRequests()
-    private var probeInFlight = false
+    @Published private var probeInFlight = false
     private var claudeQuota: RateLimitSnapshot?
     private var codexReading: CodexUsageProbe.Reading?
-    private var codexProbeInFlight = false
+    @Published private var codexProbeInFlight = false
     private var lastFeedUpdate: Date?
     private var quotaWatch: DispatchSourceFileSystemObject?
     private var cancellables: Set<AnyCancellable> = []
 
-    init() {
+    init(readers: LogReaders = LogReaders(),
+         accountQuery: @escaping @Sendable (QuotaAccount, TimeInterval, Bool) -> AccountQuota = { account, maxAge, force in
+             AccountQuota.fetch(account, maxAge: maxAge, force: force)
+         },
+         claudeQuery: @escaping @Sendable (TimeInterval) -> RateLimitSnapshot? = { UsageProbe.fetch(maxAge: $0) },
+         codexQuery: @escaping @Sendable () -> CodexUsageProbe.Reading? = { CodexUsageProbe.fetch() }) {
+        self.readers = readers
+        self.accountQuery = accountQuery
+        self.claudeQuery = claudeQuery
+        self.codexQuery = codexQuery
+        accountQuotas = QuotaAccount.discover(extraDirectories: extraAccountDirectories).map(AccountQuota.cached)
         prefs.$refreshInterval
             .removeDuplicates()
             .sink { [weak self] interval in self?.startTimer(interval) }
@@ -175,9 +265,11 @@ final class UsageStore: ObservableObject {
     }
 
     func start() {
+        refreshAccounts()
+        Task { await refresh() }
         Task {
             await PriceService.shared.refreshIfNeeded()
-            await refresh()
+            await refresh(scanLogs: false)
         }
         startTimer(prefs.refreshInterval)
         watchQuotaFeed()
@@ -211,8 +303,9 @@ final class UsageStore: ObservableObject {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: max(5, interval), repeats: true) { [weak self] _ in
             Task { @MainActor in
-                await PriceService.shared.refreshIfNeeded()
                 await self?.refresh()
+                await PriceService.shared.refreshIfNeeded()
+                await self?.refresh(scanLogs: false)
             }
         }
     }
@@ -226,6 +319,7 @@ final class UsageStore: ObservableObject {
     }
 
     private func performRefresh(scanLogs: Bool) async {
+        refreshAccounts()
         let prices = await PriceService.shared.table()
         let feed = RateLimitBridge.load()
         lastFeedUpdate = feed?.updatedAt
@@ -251,7 +345,8 @@ final class UsageStore: ObservableObject {
             )
         }
 
-        let built = await readers.dashboard(prices: prices, quota: quotaConfig, quotaMaxAge: maxAge, scanLogs: scanLogs)
+        let built = await readers.dashboard(prices: prices, quota: quotaConfig,
+                                             quotaMaxAge: prefs.codexQuotaInterval * 2, scanLogs: scanLogs)
 
         priceOrigin = origin
         priceFetchedAt = fetchedAt
@@ -262,33 +357,58 @@ final class UsageStore: ObservableObject {
         probeIfDue()
     }
 
-    /// Called as the panel opens, so what it shows is current.
+    var isQueryingQuota: Bool { accountQueryInFlight || probeInFlight || codexProbeInFlight }
+
+    /// Opening the panel checks Codex and follows Claude's automatic-query preference.
     func probeNow() {
         guard !isPreview else { return }
-        probeIfDue(force: true)
+        refreshAccounts()
+        probeIfDue()
     }
 
-    /// Both account queries start together and run off the main actor.
-    private func probeIfDue(force: Bool = false) {
-        let due = lastQuotaQuery.map { Date().timeIntervalSince($0) >= prefs.quotaInterval } ?? true
-        guard force || due, !probeInFlight || !codexProbeInFlight else { return }
-        lastQuotaQuery = Date()
-        if !probeInFlight {
+    /// One explicit query batch, without enabling future automatic queries.
+    func queryQuotasNow() {
+        guard !isPreview, !isQueryingQuota else { return }
+        refreshAccounts(force: true, manual: true)
+        probeIfDue(force: true, manual: true)
+    }
+
+    /// Default accounts without readable identities still use their tool's own policy.
+    private func probeIfDue(force: Bool = false, manual: Bool = false) {
+        func due(_ tool: Tool) -> Bool {
+            force || lastDefaultQueries[tool].map { Date().timeIntervalSince($0) >= prefs.queryInterval(for: tool) } ?? true
+        }
+        let queryClaude = (manual || prefs.automaticClaudeQuotaQueries) && due(.claudeCode) && !probeInFlight
+            && !accountQuotas.contains(where: { $0.account.tool == .claudeCode && $0.account.isDefault })
+            && (manual || !ClaudeConfigReader.isFresh(ClaudeConfigReader.read(), maxAge: prefs.quotaInterval))
+        let queryCodex = due(.codex) && !codexProbeInFlight
+            && !accountQuotas.contains(where: { $0.account.tool == .codex && $0.account.isDefault })
+        guard queryClaude || queryCodex else { return }
+        if queryClaude {
             probeInFlight = true
+            let maxAge = prefs.quotaInterval
+            let query = claudeQuery
             Task { [weak self] in
-                let probed = await Task.detached(priority: .utility, operation: { UsageProbe.fetch() }).value
                 guard let self else { return }
+                guard manual || self.prefs.automaticClaudeQuotaQueries else {
+                    self.probeInFlight = false
+                    return
+                }
+                self.lastDefaultQueries[.claudeCode] = Date()
+                let probed = await Task.detached(priority: .utility, operation: { query(maxAge) }).value
                 self.probeInFlight = false
-                // Claude's cache records the fetch time; the control response does not.
+                // /usage writes the actual fetch time into Claude's local cache.
                 guard probed != nil else { return }
                 await self.refresh(scanLogs: false)
             }
         }
-        if !codexProbeInFlight {
+        if queryCodex {
             codexProbeInFlight = true
+            let query = codexQuery
             Task { [weak self] in
-                let reading = await Task.detached(priority: .utility, operation: { CodexUsageProbe.fetch() }).value
                 guard let self else { return }
+                self.lastDefaultQueries[.codex] = Date()
+                let reading = await Task.detached(priority: .utility, operation: { query() }).value
                 self.codexReading = reading
                 self.codexProbeInFlight = false
                 await self.refresh(scanLogs: false)
@@ -311,9 +431,10 @@ final class UsageStore: ObservableObject {
     }
 
     /// A store holding a fixed dashboard, for rendering a design comparison.
-    static func preview(_ dashboard: Dashboard) -> UsageStore {
+    static func preview(_ dashboard: Dashboard, accounts: [AccountQuota] = []) -> UsageStore {
         let store = UsageStore()
         store.isPreview = true
+        store.accountQuotas = accounts
         store.timer?.invalidate()
         store.timer = nil
         store.dashboard = dashboard

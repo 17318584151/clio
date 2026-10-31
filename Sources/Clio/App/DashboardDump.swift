@@ -23,10 +23,10 @@ enum DashboardDump {
 
     private static func report(_ dashboard: Dashboard, priceOrigin: PriceOrigin) {
         print("价格来源: \(priceOrigin.label)")
-        if let live = UsageProbe.fetch() {
-            print("实时额度: 已读取于 \(Format.clock(live.updatedAt))")
+        if let cached = ClaudeConfigReader.read() {
+            print("本地额度缓存: 获取于 \(Format.clock(cached.updatedAt))")
         } else {
-            print("实时额度: Claude Code 未返回额度，无法显示百分比")
+            print("本地额度缓存: 未取得额度，无法显示百分比")
         }
         guard !dashboard.isEmpty else {
             print("未检测到本地用量数据")

@@ -28,9 +28,9 @@ struct PanelView: View {
 
     var body: some View {
         Group {
-            if store.isLoading {
+            if store.isLoading && store.accountQuotas.isEmpty {
                 LoadingView()
-            } else if !store.dashboard.isEmpty {
+            } else if !store.dashboard.isEmpty || !store.accountQuotas.isEmpty {
                 content(store.dashboard)
             } else {
                 EmptyStateView(onRescan: { Task { await store.refresh() } },
@@ -140,14 +140,58 @@ struct PanelView: View {
         let selectedUsage = granularity == .custom
             ? DashboardBuilder.combined(selectedParts.map(\.usage), events: [], now: dashboard.updatedAt)
             : usage
+        let quotaUpdatedAt = store.accountQuotas.compactMap { $0.quota?.updatedAt }.max()
         VStack(spacing: 10) {
             VStack(spacing: 10) {
-                SubscriptionCard(snapshots: dashboard.snapshots)
-                UsageCard(usage: selectedUsage, parts: selectedParts, granularity: $granularity,
-                          customRange: $customRange, isDatePickerPresented: $isDatePickerPresented)
-                ActivityCards(activity: usage.activity, parts: parts)
-                ModelBreakdownCard(usage: selectedUsage, granularity: granularity, basis: $basis)
-                HeatmapCard(dailyTokens: usage.dailyTokens, parts: parts)
+                VStack(spacing: 6) {
+                    HStack {
+                        CardTitle(text: "账号额度")
+                        Spacer()
+                        Text(quotaUpdatedAt.map { "最近数据 \(Format.quotaTime($0))" } ?? "暂无更新时间")
+                            .font(.system(size: 10)).monospacedDigit()
+                            .foregroundStyle(theme.textSecondary)
+                            .help("最近一份额度数据的实际获取时间；各窗口的更新时间见下方")
+                        Button { store.queryQuotasNow() } label: {
+                            Group {
+                                if store.isQueryingQuota {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(theme.accent)
+                                }
+                            }
+                            .frame(width: 24, height: 24)
+                            .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: 6))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(store.isQueryingQuota)
+                        .help("手动刷新所有账号额度（会联网查询）")
+                        .accessibilityLabel(store.isQueryingQuota ? "额度查询中" : "手动刷新额度")
+                    }
+                    .padding(.horizontal, 4)
+                    if store.accountQuotas.isEmpty {
+                        SubscriptionCard(snapshots: dashboard.snapshots)
+                    } else {
+                        AccountQuotaCard(accounts: store.accountQuotas)
+                    }
+                }
+                if store.isLoading {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("正在后台读取历史用量…")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                } else {
+                    UsageCard(usage: selectedUsage, parts: selectedParts, granularity: $granularity,
+                              customRange: $customRange, isDatePickerPresented: $isDatePickerPresented)
+                    ActivityCards(activity: usage.activity, parts: parts)
+                    ModelBreakdownCard(usage: selectedUsage, granularity: granularity, basis: $basis)
+                }
             }
             .padding(.horizontal, 12)
             footer(dashboard.updatedAt)
@@ -172,7 +216,7 @@ struct PanelView: View {
 
     private func footer(_ updatedAt: Date) -> some View {
         HStack {
-            Text("更新于 \(Format.clock(updatedAt)) · 本地读取")
+            Text(store.isLoading ? "账号额度已就绪 · 用量读取中" : "更新于 \(Format.clock(updatedAt)) · 本地读取")
                 .font(.system(size: 11))
                 .foregroundStyle(theme.textSecondary)
             if let release = updater.availableRelease {

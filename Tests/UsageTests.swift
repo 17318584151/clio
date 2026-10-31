@@ -1009,6 +1009,9 @@ enum UsageTests {
         let dated = Data(#"{"cachedUsageUtilization":{"fetchedAtMs":1000000,"utilization":{"five_hour":{"utilization":20}}}}"#.utf8)
         expect(ClaudeConfigReader.parse(dated)?.updatedAt == Date(timeIntervalSince1970: 1000),
                "Claude caches retain their actual fetch timestamp")
+        let wrongAccount = Data(#"{"oauthAccount":{"accountUuid":"new"},"cachedUsageUtilization":{"accountUuid":"old","fetchedAtMs":1000000,"utilization":{"seven_day":{"utilization":100}}}}"#.utf8)
+        expect(ClaudeConfigReader.parse(wrongAccount) == nil,
+               "Claude cached quota must belong to the configured account")
     }
 
     private static func testUsageHistory() throws {

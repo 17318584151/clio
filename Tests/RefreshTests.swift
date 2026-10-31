@@ -29,10 +29,118 @@ enum RefreshTests {
         expect(requests.next() == nil, "burst drained")
         expect(requests.request(scanLogs: false), "worker restarts")
         expect(requests.next() == false && requests.next() == nil, "next batch drains")
+        try startupAccounts(root)
+        try await claudeQueriesDisabled(root)
         try await dashboard(root)
         try await codexQuota(root)
         try await codexTimingEnrichment(root)
         print("Refresh regression checks passed")
+    }
+
+    final class QueryRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String] = []
+        func record(_ value: String) { lock.lock(); defer { lock.unlock() }; entries.append(value) }
+        var calls: [String] { lock.lock(); defer { lock.unlock() }; return entries }
+    }
+
+    @MainActor
+    static func claudeQueriesDisabled(_ root: URL) async throws {
+        let prefs = Preferences.shared
+        let previousAutomatic = prefs.automaticClaudeQuotaQueries
+        let previousClaudeInterval = prefs.quotaInterval
+        let previousCodexInterval = prefs.codexQuotaInterval
+        prefs.automaticClaudeQuotaQueries = false
+        prefs.quotaInterval = 900
+        prefs.codexQuotaInterval = 1800
+        expect(prefs.queryInterval(for: .claudeCode) == 900 && prefs.queryInterval(for: .codex) == 1800,
+               "Claude and Codex keep independent polling and freshness intervals")
+        defer {
+            prefs.automaticClaudeQuotaQueries = previousAutomatic
+            prefs.quotaInterval = previousClaudeInterval
+            prefs.codexQuotaInterval = previousCodexInterval
+        }
+        let directory = root.appending(path: "query-account")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let accountID = UUID().uuidString
+        let data: [String: Any] = [
+            "oauthAccount": ["accountUuid": accountID, "emailAddress": "query@example.com"],
+            "cachedUsageUtilization": ["accountUuid": accountID,
+                "fetchedAtMs": Date().addingTimeInterval(-7200).timeIntervalSince1970 * 1000,
+                "utilization": ["seven_day": ["utilization": 25]]]
+        ]
+        try JSONSerialization.data(withJSONObject: data).write(to: directory.appending(path: ".claude.json"))
+        let codexDirectory = root.appending(path: "query-codex")
+        try FileManager.default.createDirectory(at: codexDirectory, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["tokens": ["account_id": UUID().uuidString]])
+            .write(to: codexDirectory.appending(path: "auth.json"))
+        let defaults = UserDefaults.standard
+        let previousDirectories = defaults.object(forKey: "accountDirectories")
+        defaults.set([directory.path, codexDirectory.path], forKey: "accountDirectories")
+        defer { defaults.set(previousDirectories, forKey: "accountDirectories") }
+        let recorder = QueryRecorder()
+        let readers = LogReaders(
+            claude: ClaudeCodeReader(root: root.appending(path: "no-claude-logs"), sleepHistory: { SleepTimeline() }),
+            codex: CodexReader(root: root.appending(path: "no-codex-logs"), sleepHistory: { SleepTimeline() }))
+        let store = UsageStore(readers: readers, accountQuery: { account, _, force in
+            recorder.record(force ? "manual" : account.tool == .claudeCode ? "automatic-claude" : "automatic-codex")
+            return AccountQuota.cached(account)
+        }, claudeQuery: { _ in recorder.record("default-claude"); return nil },
+           codexQuery: { recorder.record("default-codex"); return nil })
+        store.refreshAccounts(force: true)
+        store.probeNow()
+        await store.refresh(scanLogs: false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        expect(!recorder.calls.contains("automatic-claude") && !recorder.calls.contains("default-claude"),
+               "disabling Claude automatic queries blocks all automatic Claude entry points")
+        expect(recorder.calls.contains("automatic-codex"), "Codex queries automatically while Claude queries are disabled")
+        expect(store.accountQuotas.first { $0.account.name == "query@example.com" }?.status == "仅本地缓存",
+               "offline accounts show a local-cache status instead of an endless query placeholder")
+        store.queryQuotasNow()
+        store.queryQuotasNow()
+        for _ in 0..<500 where store.isQueryingQuota { try await Task.sleep(nanoseconds: 10_000_000) }
+        expect(!store.isQueryingQuota, "manual query completes")
+        expect(recorder.calls.filter { $0 == "manual" }.count == store.accountQuotas.count,
+               "manual action queries each account once and repeated clicks share the same batch")
+        expect(!prefs.automaticClaudeQuotaQueries, "manual action never enables automatic querying")
+        let completedCalls = recorder.calls
+        store.probeNow()
+        await store.refresh(scanLogs: false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        expect(recorder.calls == completedCalls, "panel opening respects independent query intervals after a manual query")
+
+        prefs.automaticClaudeQuotaQueries = true
+        store.refreshAccounts(force: true)
+        prefs.automaticClaudeQuotaQueries = false
+        for _ in 0..<500 where store.isQueryingQuota { try await Task.sleep(nanoseconds: 10_000_000) }
+        let subsequent = Array(recorder.calls.dropFirst(completedCalls.count))
+        expect(!subsequent.contains("automatic-claude") && !subsequent.contains("default-claude"),
+               "turning off Claude queries prevents queued Claude accounts from launching")
+        expect(subsequent.contains("automatic-codex"), "queued Codex queries continue when Claude queries are turned off")
+    }
+
+    @MainActor
+    static func startupAccounts(_ root: URL) throws {
+        let directory = root.appending(path: "startup-account")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let accountID = UUID().uuidString
+        let data: [String: Any] = [
+            "oauthAccount": ["accountUuid": accountID, "emailAddress": "startup@example.com"],
+            "cachedUsageUtilization": ["accountUuid": accountID,
+                "fetchedAtMs": Date().timeIntervalSince1970 * 1000,
+                "utilization": ["seven_day": ["utilization": 25]]]
+        ]
+        try JSONSerialization.data(withJSONObject: data).write(to: directory.appending(path: ".claude.json"))
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "accountDirectories")
+        defaults.set([directory.path], forKey: "accountDirectories")
+        defer { defaults.set(previous, forKey: "accountDirectories") }
+        let store = UsageStore()
+        expect(store.isLoading, "historical statistics have not been scanned")
+        expect(store.accountQuotas.first { $0.account.name == "startup@example.com" }?.quota?.sevenDay?.fraction == 0.25,
+               "cached account quotas are available before history scanning or networking")
+        let preview = UsageStore.preview(Dashboard(snapshots: [], combined: .empty, updatedAt: Date()))
+        expect(preview.accountQuotas.isEmpty, "design previews never display local accounts")
     }
 
     static func line(_ date: Date, id: String, tokens: Int) throws -> Data {

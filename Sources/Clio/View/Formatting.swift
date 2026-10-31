@@ -112,4 +112,8 @@ enum Format {
         formatter.dateFormat = "HH:mm"
         return formatter.string(from: date)
     }
+
+    static func quotaTime(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date) ? clock(date) : stamp(date)
+    }
 }

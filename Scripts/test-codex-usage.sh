@@ -19,6 +19,7 @@ swiftc -swift-version 5 -module-cache-path "$scratch/module-cache" \
     "$root/Sources/Clio/Data/SleepHistory.swift" \
     "$root/Sources/Clio/Data/ClaudeCodeReader.swift" \
     "$root/Sources/Clio/Data/RateLimitBridge.swift" \
+    "$root/Sources/Clio/Data/ClaudeConfigReader.swift" \
     "$root/Sources/Clio/Data/UsageProbe.swift" \
     "$root/Sources/Clio/Data/CodexUsageProbe.swift" \
     "$root/Tests/CodexUsageProbeTests.swift"

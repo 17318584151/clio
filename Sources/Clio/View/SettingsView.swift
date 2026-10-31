@@ -136,6 +136,33 @@ struct SettingsContent: View {
                 }
             }
 
+            section("账号额度") {
+                ForEach(store.accountQuotas) { reading in
+                    row(reading.account.tool.displayName, detail: reading.account.name) {
+                        if store.isCustomAccount(reading.account) {
+                            Button("移除") { store.removeAccountDirectory(reading.account) }
+                        } else {
+                            Text(reading.account.isDefault ? "系统默认" : "自动发现")
+                                .foregroundStyle(theme.textSecondary)
+                        }
+                    }
+                }
+                row("添加账号目录", detail: "自动识别系统及 Orca 账号；其他客户端可添加配置目录。历史用量仍按本机汇总。") {
+                    Button("添加…") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseDirectories = true
+                        panel.canChooseFiles = false
+                        panel.showsHiddenFiles = true
+                        if panel.runModal() == .OK, let directory = panel.url {
+                            store.addAccountDirectory(directory)
+                        }
+                    }
+                }
+                if let error = store.accountDirectoryError {
+                    Text(error).font(.system(size: 11)).foregroundStyle(.red).padding(12)
+                }
+            }
+
             section("菜单栏与外观") {
                 row("显示内容") {
                     Picker("", selection: $prefs.menuBarDisplay) {
@@ -146,7 +173,7 @@ struct SettingsContent: View {
                     .fixedSize()
                 }
                 if prefs.menuBarDisplay.showsQuota {
-                    row("额度预览", detail: "每周剩余 · Claude、Codex") {
+                    row("额度预览", detail: "系统默认账号 · Claude、Codex 每周已用") {
                         MenuBarQuotaLabel(claudeFraction: store.dashboard.snapshot(for: .claudeCode)?.week.fraction,
                                           codexFraction: store.dashboard.snapshot(for: .codex)?.week.fraction,
                                           isDark: scheme == .dark,
@@ -192,10 +219,14 @@ struct SettingsContent: View {
                     .fixedSize()
                 }
                 .help("刷新本地用量与日志中的额度快照，菜单栏圆环随新的额度数据更新")
-                row("额度查询频率", detail: store.lastQuotaQuery.map {
-                    "Claude Code、Codex · 最近查询 \(Format.clock($0))"
-                } ?? "Claude Code、Codex · 尚未查询") {
-                    Picker("", selection: $prefs.quotaInterval) {
+                row("Claude Code 查询频率") {
+                    Picker("", selection: Binding(
+                        get: { prefs.automaticClaudeQuotaQueries ? prefs.quotaInterval : 0 },
+                        set: { interval in
+                            if interval > 0 { prefs.quotaInterval = interval }
+                            prefs.automaticClaudeQuotaQueries = interval > 0
+                        })) {
+                        Text("不自动查询").tag(0.0)
                         Text("每 15 分钟").tag(900.0)
                         Text("每 30 分钟").tag(1800.0)
                         Text("每 1 小时").tag(3600.0)
@@ -205,7 +236,19 @@ struct SettingsContent: View {
                     .controlSize(.small)
                     .fixedSize()
                 }
-                .help("两个工具并行查询；打开面板时立即查询。时间表示查询开始时间，正在进行的查询不会重复发起")
+                .help("仅控制 Claude Code。不自动查询时仅读取本地缓存；需要更新可点击额度区域右上角的刷新按钮")
+                row("Codex 查询频率") {
+                    Picker("", selection: $prefs.codexQuotaInterval) {
+                        Text("每 15 分钟").tag(900.0)
+                        Text("每 30 分钟").tag(1800.0)
+                        Text("每 1 小时").tag(3600.0)
+                        Text("每 2 小时").tag(7200.0)
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+                .help("Codex 始终按此间隔自动查询，不受 Claude Code 的设置影响")
             }
 
             section("更新") {

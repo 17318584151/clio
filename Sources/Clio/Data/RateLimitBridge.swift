@@ -36,7 +36,7 @@ enum RateLimitBridge {
         return try? decoder.decode(RateLimitSnapshot.self, from: data)
     }
 
-    /// Shared with `UsageProbe`: the two sources report the same windows, under
+    /// Shared with `ClaudeConfigReader`: the sources report the same windows, under
     /// slightly different key names and time formats.
     static func snapshot(from limits: [String: Any]) -> RateLimitSnapshot {
         RateLimitSnapshot(updatedAt: Date(),
@@ -47,8 +47,8 @@ enum RateLimitBridge {
 
     private static func window(_ value: Any?) -> RateLimitWindow? {
         guard let object = value as? [String: Any] else { return nil }
-        // The status line calls it `used_percentage`; the CLI's own answer to a
-        // `get_usage` request calls the same number `utilization`.
+        // The status line calls it `used_percentage`; the CLI's quota cache
+        // calls the same number `utilization`.
         return RateLimitWindow(usedPercentage: number(object["used_percentage"]) ?? number(object["utilization"]),
                                resetsAt: date(object["resets_at"]))
     }
