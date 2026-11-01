@@ -71,7 +71,7 @@ enum Snapshot {
                     where store.dashboard.combined.totals[period] != nil {
                     for scheme in [ColorScheme.light, .dark] {
                         let name = scheme == .light ? "light" : "dark"
-                        write(UsageCard(usage: store.dashboard.combined, parts: store.dashboard.snapshots,
+                        write(UsageCard(usage: store.dashboard.combined, parts: store.dashboard.usageParts,
                                         granularity: .constant(period))
                                 .frame(width: Metrics.panelWidth - 24)
                                 .padding(12)
@@ -85,7 +85,7 @@ enum Snapshot {
 
             for scheme in [ColorScheme.light, .dark] {
                 let name = scheme == .light ? "light" : "dark"
-                write(PanelView(onOpenSettings: {})
+                writeNative(PanelView(onOpenSettings: {})
                         .environmentObject(UsageStore.preview(DesignSample.dashboard(), accounts: DesignSample.accounts()))
                         .environmentObject(prefs)
                         .environment(\.colorScheme, scheme)
@@ -94,12 +94,13 @@ enum Snapshot {
             }
 
             let sample = DesignSample.dashboard()
-            write(ModelBreakdownCard(usage: sample.combined, granularity: .day,
+            writeNative(ModelBreakdownCard(usage: sample.combined, granularity: .day,
                                      basis: .constant(.tokens))
+                    .environmentObject(prefs)
                     .frame(width: Metrics.panelWidth - 24)
                     .environment(\.theme, Theme.light),
                   to: folder.appending(path: "models.png"))
-            write(HeatmapCard(dailyTokens: sample.combined.dailyTokens, parts: sample.snapshots)
+            write(HeatmapCard(dailyTokens: sample.combined.dailyTokens, parts: sample.usageParts)
                     .frame(width: Metrics.panelWidth - 24)
                     .environment(\.theme, Theme.light),
                   to: folder.appending(path: "heatmap.png"))

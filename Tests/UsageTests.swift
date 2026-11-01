@@ -7,6 +7,74 @@ enum UsageTests {
     private static let root = FileManager.default.temporaryDirectory.appending(path: "clio-usage-\(UUID())")
     private static let prices = PriceTable(prices: ["gpt-priced": .make(input: 2, output: 10, cacheRead: 0.2)])
 
+    static func testModelCategories() {
+        for name in ["claude", "CLAUDE-FABLE-5-1", "anthropic/claude-sonnet-4", "us.anthropic.claude-opus-4:0"] {
+            expect(ModelCategory(model: name) == .claudeCode, "Claude model category: \(name)")
+        }
+        for name in ["gpt-5", "GPT-4o", "openai/gpt-6-sol", "gpt4o", "azure:gpt-4.1", "codex-auto-review", "CODEX-AUTO-REVIEW"] {
+            expect(ModelCategory(model: name) == .codex, "Codex model category: \(name)")
+        }
+        for name in ["", "unknown", "codex", "deepseek/deepseek-v4-pro", "notclaude", "gptish", "gemini-3", "my-codex-model", "codex-auto-review-experimental"] {
+            expect(ModelCategory(model: name) == .other, "Other model category: \(name)")
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 18, hour: 12))!
+        let date = calendar.date(byAdding: .day, value: -1, to: now)!
+        func event(_ name: String, _ total: Int) -> UsageEvent {
+            UsageEvent(timestamp: date, model: name, counts: TokenCounts(input: total), dedupeKey: name)
+        }
+        let claude = [event("gpt-5", 10), event("deepseek-v4", 20), event("codex-auto-review", 7)]
+        let codex = [event("claude-fable-5-1", 30), event("unknown", 40)]
+        expect(DashboardBuilder.categorized([], prices: prices, now: now, calendar: calendar).isEmpty,
+               "Empty sources retain empty state")
+        let parts = DashboardBuilder.categorized([
+            (.claudeCode, claude, UsageLedger(days: ["2026-10-17": 37, "2026-10-01": 9])),
+            (.codex, codex, UsageLedger(days: ["2026-10-17": 70, "2026-10-01": 8]))
+        ], prices: prices, now: now, calendar: calendar)
+        let range = UsageDateRange(start: date, end: date, today: now, calendar: calendar)
+        let selected = parts.map { DashboardBuilder.selecting($0.usage, range: range, calendar: calendar) }
+        expect(selected.map { $0.totals[.custom]!.total } == [30, 57, 20], "Models classify across source readers")
+        expect(selected[0].models[.custom]?.map(\.model) == ["claude-fable-5-1"], "Model detail follows category")
+        expect(selected[2].buckets[.custom]?.reduce(0, { $0 + $1.tokens }) == 20, "Other chart includes all tokens")
+        let merged = DashboardBuilder.combined(selected, events: claude + codex, now: now, calendar: calendar)
+        expect(merged.totals[.custom]?.total == 107, "Combined equals three categories including automatic review")
+        expect(parts.map { $0.usage.totals[.month]!.total } == [39, 65, 20], "Legacy history remains compatible")
+        let verified = CategoryLedger(timeZone: calendar.timeZone.identifier,
+                                     days: ["2026-10-17": ["claudeCode": 30, "codex": 17, "other": 60]])
+        let missing = DashboardBuilder.categorized([
+            (.claudeCode, [], UsageLedger(days: ["2026-10-17": 37])),
+            (.codex, [], UsageLedger(days: ["2026-10-17": 70]))
+        ], prices: prices, now: now, calendar: calendar, verified: verified)
+        expect(missing.map { $0.usage.totals[.month]!.total } == [30, 17, 60], "Verified day survives log retention")
+        expect(missing.allSatisfy { $0.usage.unavailableDetails.contains(.month) }, "Missing details remain unavailable")
+        for totals in [["claudeCode": 30, "codex": 10, "other": 60],
+                       ["claudeCode": 30, "codex": 10, "other": 67]] {
+            let stale = CategoryLedger(timeZone: calendar.timeZone.identifier, days: ["2026-10-17": totals])
+            let recovered = DashboardBuilder.categorized([
+                (.claudeCode, claude, UsageLedger(days: ["2026-10-17": 37])),
+                (.codex, codex, UsageLedger(days: ["2026-10-17": 70]))
+            ], prices: prices, now: now, calendar: calendar, verified: stale)
+            expect(recovered.map { $0.usage.totals[.month]!.total } == [30, 57, 20],
+                   "Recovered model details supersede incompatible saved classification without duplication")
+            expect(recovered.map { $0.usage.dailyTokens[calendar.startOfDay(for: date)] ?? 0 } == [30, 57, 20],
+                   "Recovered details and heatmap retain the same category totals")
+        }
+        expect(selected[1].models[.custom]?.contains { $0.model == "codex-auto-review" && $0.tokens == 7 } == true,
+               "Automatic review belongs to Codex regardless of source reader")
+        let incident = [event("claude-fable-5-1", 54_000), event("gpt-6-sol", 42_000),
+                        event("codex-auto-review", 700)]
+        let repaired = DashboardBuilder.categorized([(.codex, incident, nil)], prices: prices,
+                                                    now: now, calendar: calendar)
+        expect(repaired.map { $0.usage.totals[.month]!.total } == [54_000, 42_700, 0],
+               "Synthetic automatic review data preserves category totals")
+        expect(DashboardBuilder.combined(repaired.map(\.usage), events: incident, now: now,
+                                         calendar: calendar).totals[.month]?.total == 96_700,
+               "Automatic review reclassification preserves combined total")
+        expect(UsageScope.combined.next.next.next == .other && UsageScope.other.next == .combined,
+               "Scope includes other category")
+    }
+
     static func main() throws {
         defer { try? FileManager.default.removeItem(at: root) }
         try testArchives()
@@ -21,9 +89,12 @@ enum UsageTests {
         try testCompressedLogs()
         testQuotaVisibility()
         testUnknownPrices()
+        testCostSubtotals()
         testMonthlyUnknownModel()
         testZeroPrice()
         testAutoReviewPrice()
+        testModelCategories()
+        try testModelSourceMerging()
         testCombinedUsage()
         testCombinedActivity()
         testCombinedMilestones()
@@ -52,7 +123,7 @@ enum UsageTests {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("39 usage regression scenarios passed")
+        print("41 usage regression scenarios passed")
     }
 
     private static func record(_ type: String, at seconds: Double, payload: [String: Any]) throws -> String {
@@ -664,11 +735,13 @@ enum UsageTests {
                 dedupeKey: UUID().uuidString, estimatedDuration: seconds))
             return result
         }
-        expect(Format.outputSpeed(speed(200, 500)) == "≈ 0.4 tok/s", "slow valid output does not round to zero")
-        expect(Format.outputSpeed(speed(200, 3600)) == "≈ 0.056 tok/s", "minimum eligible rate retains precision")
-        expect(Format.outputSpeed(speed(200, 250)) == "≈ 0.8 tok/s", "sub-token rates retain their fractional value")
-        expect(Format.outputSpeed(speed(200, 200)) == "≈ 1 tok/s", "one-token rate keeps integer formatting")
-        expect(Format.outputSpeed(speed(604, 10)) == "≈ 60 tok/s", "ordinary output retains integer formatting")
+        expect(Format.outputSpeed(speed(200, 500)) == "0.4 t/s", "slow valid output does not round to zero")
+        expect(Format.outputSpeed(speed(200, 3600)) == "0.056 t/s", "minimum eligible rate retains precision")
+        expect(Format.outputSpeed(speed(200, 250)) == "0.8 t/s", "sub-token rates retain their fractional value")
+        expect(Format.outputSpeed(speed(200, 200)) == "1 t/s", "one-token rate keeps integer formatting")
+        expect(Format.outputSpeed(speed(604, 10)) == "60 t/s", "ordinary output retains integer formatting")
+        expect(Format.outputSpeed(speed(420, 10)) == "42 t/s", "compact speed omits the approximation prefix")
+        expect(Format.outputSpeed(speed(10_000, 10)) == "1000 t/s", "four-digit output keeps the compact unit")
         expect(Format.outputSpeed(OutputSpeed()) == "—", "missing samples remain unavailable")
     }
 
@@ -1189,7 +1262,7 @@ enum UsageTests {
                "the heatmap does not count recent usage twice")
         expect(snapshot.usage.previousTotals[.month] == 800, "previous-month comparisons include retained history")
         expect(snapshot.usage.totals[.month]?.total == 800 && snapshot.usage.models[.month]?.isEmpty == true
-               && snapshot.usage.costs[.month] == nil && snapshot.usage.unavailableDetails.contains(.month),
+               && snapshot.usage.costs[.month] == 0.001 && snapshot.usage.partialCosts.contains(.month) && snapshot.usage.unavailableDetails.contains(.month),
                "selected-period total includes saved history while incomplete model and cost details stay unavailable")
         let empty = DashboardBuilder.snapshot(tool: .claudeCode, events: [], rejections: [], prices: prices,
             quota: .init(), ledger: ledger, now: fixtureNow, calendar: calendar)
@@ -1255,25 +1328,137 @@ enum UsageTests {
         }
         let result = snapshot(events).usage
         let unknown: Double? = result.models[.day]?.first { $0.model == "codex-auto-review" }?.cost
-        expect(unknown == 0, "models without prices must contribute zero cost")
-        expect(result.costs[.day] == 0.002, "unknown models must not hide known costs")
+        expect(unknown == nil, "models without prices remain unpriced")
+        expect(result.costs[.day] == 0.002 && result.partialCosts.contains(.day), "mixed prices retain a marked known subtotal")
         expect(result.totals[.day]?.total == 2000, "unpriced model tokens must still be counted")
         expect(result.models[.day]?.first { $0.model == "gpt-priced" }?.cost == 0.002,
                "known model costs must remain visible")
     }
 
+    private static func testCostSubtotals() {
+        let known = UsageEvent(timestamp: now, model: "gpt-priced", counts: .init(input: 1000), dedupeKey: "priced")
+        let missing = UsageEvent(timestamp: now, model: "unpriced", counts: .init(input: 500), dedupeKey: "unpriced")
+        let free = UsageEvent(timestamp: now, model: "codex-auto-review", counts: .init(input: 500), dedupeKey: "free")
+        let rates = prices.merging(.builtin)
+        let full = snapshot([known, known], prices: rates).usage
+        expect(full.costs[.day] == 0.004 && !full.partialCosts.contains(.day), "fully priced totals remain complete")
+        let mixed = snapshot([known, missing], prices: rates).usage
+        expect(mixed.costs[.day] == 0.002 && mixed.partialCosts.contains(.day), "mixed totals retain known prices")
+        let unavailable = snapshot([missing], prices: rates).usage
+        expect(unavailable.costs[.day] == nil && unavailable.models[.day]?.first?.cost == nil, "all unpriced stays unavailable")
+        let zero = snapshot([free], prices: rates).usage
+        expect(zero.costs[.day] == 0 && !zero.partialCosts.contains(.day), "a verified free rate remains zero")
+        let partialZero = snapshot([free, missing], prices: rates).usage
+        expect(partialZero.costs[.day] == 0 && partialZero.partialCosts.contains(.day), "known zero and unknown remain distinguishable")
+        let empty = snapshot([], prices: rates).usage
+        expect(empty.costs[.day] == 0 && !empty.partialCosts.contains(.day), "empty usage retains zero")
+        let allUnknown = DashboardBuilder.combined([unavailable, empty], events: [missing], now: now)
+        expect(allUnknown.costs[.day] == nil, "empty categories cannot turn unknown usage into zero")
+        let combined = DashboardBuilder.combined([mixed, zero, empty], events: [known, missing, free], now: now)
+        expect(combined.costs[.day] == 0.002 && combined.partialCosts.contains(.day), "combined subtotal is not counted twice")
+        let date = Calendar.current.startOfDay(for: now)
+        let custom = DashboardBuilder.selecting(mixed, range: UsageDateRange(start: date, end: date, today: date))
+        expect(custom.costs[.custom] == 0.002 && custom.partialCosts.contains(.custom), "custom ranges preserve partial coverage")
+        let categories = DashboardBuilder.categorized([(.codex, [known, missing, free], nil)], prices: rates, now: now, calendar: .current)
+        let categorized = DashboardBuilder.combined(categories.map(\.usage), events: [known, missing, free], now: now)
+        expect(categorized.costs[.day] == 0.002 && categorized.totals[.day]?.total == 2000,
+               "category aggregation conserves money and all tokens")
+    }
+
     private static func testMonthlyUnknownModel() {
         let monthStart = DashboardBuilder.range(for: .month, containing: now, calendar: .current).lowerBound
-        let unknown = UsageEvent(timestamp: monthStart, model: "codex",
-                                 counts: .init(reportedTotal: 7_212_919), dedupeKey: "monthly-unknown")
+        let unknown = UsageEvent(timestamp: monthStart, model: "unknown",
+                                 counts: .init(reportedTotal: 10_000), dedupeKey: "monthly-unknown")
         let known = UsageEvent(timestamp: now, model: "gpt-priced",
                                counts: .init(input: 1000), dedupeKey: "monthly-known")
         let result = snapshot([unknown, known]).usage
-        expect(result.costs[.month] == 0.002, "monthly costs must include priced models despite historical unknown models")
-        expect(result.totals[.month]?.total == 7_213_919, "unknown model totals must remain counted")
-        expect(result.models[.month]?.first { $0.model == "codex" }?.cost == 0,
-               "unknown historical model rows must show zero cost")
-        expect(snapshot([unknown]).usage.costs[.month] == 0, "periods with only unknown prices must show zero")
+        expect(result.costs[.month] == 0.002 && result.partialCosts.contains(.month), "monthly total retains its known subtotal")
+        expect(result.totals[.month]?.total == 11_000, "unknown model totals must remain counted")
+        expect(result.models[.month]?.first { $0.model == "codex:unknown" }?.cost == nil,
+               "unknown historical model rows remain unpriced")
+        expect(snapshot([unknown]).usage.costs[.month] == nil, "periods with only unknown prices remain unpriced")
+    }
+
+    private static func testModelSourceMerging() throws {
+        let raw = "workbuddy-ai/deepseek-v4.1-flash"
+        let alternate = "gateway/deepseek-v4.1-flash"
+        for name in [raw, alternate, "deepseek/deepseek-v4.1-flash", "deepseek-v4.1-flash"] {
+            expect(ModelNaming.key(for: name, source: .codex) == "deepseek-v4.1-flash",
+                   "gateway prefixes preserve the complete model version")
+        }
+        for name in ["deepseek-v4-pro", "deepseek-v4.1", "deepseek-v4.1-flash-preview", "deepseek-v4.1-flash/20261001", "deepseek-v4.1-flash-20261001"] {
+            expect(ModelNaming.key(for: name, source: .codex) != "deepseek-v4.1-flash",
+                   "distinct model variants cannot merge")
+        }
+        for name in ["claude-sonnet-4-6", "gpt-6-sol", "codex-auto-review"] {
+            expect(ModelNaming.key(for: "gateway/" + name, source: .claudeCode) == name,
+                   "existing model families remain compatible")
+        }
+        func event(_ model: String, output: Int, duration: Double, source: Tool) -> UsageEvent {
+            UsageEvent(timestamp: now, model: model, counts: .init(input: 100, output: output),
+                       dedupeKey: model, estimatedDuration: duration, source: source)
+        }
+        let a = event(raw, output: 200, duration: 10, source: .codex)
+        let b = event(alternate, output: 600, duration: 60, source: .claudeCode)
+        let other = event("deepseek/deepseek-v4-pro", output: 300, duration: 10, source: .codex)
+        let rates = PriceTable(prices: ["deepseek/deepseek-v4.1-flash": .make(input: 1, output: 2),
+                                       "deepseek/deepseek-v4-pro": .make(input: 9, output: 9)])
+        let parts = DashboardBuilder.categorized([(.codex, [a, other], nil), (.claudeCode, [b], nil)],
+                                                prices: rates, now: now, calendar: .current)
+        let combined = DashboardBuilder.combined(parts.map(\.usage), events: [a, b, other], now: now)
+        let row = combined.models[.day]?.first { $0.model == "deepseek-v4.1-flash" }
+        expect(row?.tokens == 1000 && row?.displayName == "deepseek-v4.1-flash", "same model merges across readers")
+        expect(row?.sources.count == 2 && row?.sources.map(\.tokens).sorted() == [300, 700],
+               "source records retain each raw model and its token count")
+        expect(row?.sources.contains { $0.model == raw && $0.tool == .codex } == true,
+               "source records preserve the source tool and raw identity")
+        expect(abs((row?.cost ?? 0) - 0.0018) < 1e-12, "merged gateway models use the same original-provider rate")
+        expect(abs((row?.outputSpeed.tokensPerSecond ?? 0) - 800.0 / 70) < 1e-12,
+               "merged speed is weighted by duration rather than averaging rates")
+        expect(row?.outputSpeed.samples == 2, "speed samples are retained")
+        expect(combined.models[.day]?.count == 2 && combined.totals[.day]?.total == 1400,
+               "different DeepSeek models remain separate and preserve the total")
+        expect(combined.models[.day]?.reduce(0, { $0 + $1.tokens }) == 1400
+               && combined.buckets[.day]?.reduce(0, { $0 + $1.tokens }) == 1400,
+               "model rows and category chart conserve the combined total")
+        expect(abs((combined.costs[.day] ?? 0) - 0.0054) < 1e-12, "each normalized model uses its own original-provider rate")
+        let direct = DashboardBuilder.combined([snapshot([a], prices: rates).usage, snapshot([b], tool: .claudeCode, prices: rates).usage],
+                                               events: [a, b], now: now)
+        expect(direct.models[.day]?.count == 1 && direct.models[.day]?.first?.sources.count == 2,
+               "combining tool summaries also merges source details")
+        expect(abs((direct.costs[.day] ?? 0) - 0.0018) < 1e-12,
+               "fully priced merged tools retain their complete cost")
+        let incomplete = UsageEvent(timestamp: b.timestamp, model: b.model, counts: .init(reportedTotal: 700),
+                                dedupeKey: b.dedupeKey, source: b.source)
+        let partial = snapshot([a, incomplete], prices: rates).usage.models[.day]?.first
+        expect(partial?.cost == 0.0005 && partial?.hasUnpricedUsage == true && partial?.sources.filter { $0.cost != nil }.count == 1,
+               "a partly priced merged row retains the known subtotal and coverage flag")
+
+        let unknown = UsageEvent(timestamp: now, model: "unknown", counts: .init(reportedTotal: 10_000), dedupeKey: "unknown")
+        let unknownParts = DashboardBuilder.categorized([(.codex, [unknown], nil), (.claudeCode, [unknown], nil)],
+                                                       prices: rates, now: now, calendar: .current)
+        expect(unknownParts.map { $0.usage.totals[.day]?.total ?? 0 } == [0, 10_000, 10_000],
+               "only Codex-source unknown events belong to the Codex category")
+        let codexRow = unknownParts[1].usage.models[.day]?.first
+        expect(codexRow?.displayName == "Codex" && codexRow?.sources.first?.model == "unknown",
+               "Codex display preserves the original unknown model in source details")
+        let fabricated = PriceTable(prices: ["unknown": .make(input: 1, output: 2)])
+        expect(fabricated.cost(unknown.counts, model: unknown.model) == nil,
+               "reported totals alone cannot be priced even if a model rate exists")
+
+        let base = try directories("gateway-duplicates")
+        let context = try record("turn_context", at: -70, payload: ["model": raw])
+        let response = try usage(-60)
+        _ = try log(base, "active", lines: [context, response])
+        _ = try log(base, "archive", archived: true, lines: [context, response])
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
+        let reading = reader.refresh(now: now).events
+        let usage = snapshot(reading).usage
+        expect(reading.count == 1 && reading.first?.model == raw && reading.first?.source == .codex,
+               "reader deduplication preserves raw model and source")
+        expect(usage.models[.day]?.first?.tokens == reading.first?.counts.total,
+               "duplicate logs do not add tokens during model normalization")
+        expect(reader.refresh(now: now).events.count == 1, "refresh cannot count normalized events twice")
     }
 
     private static func testZeroPrice() {
@@ -1315,8 +1500,7 @@ enum UsageTests {
         expect(combined.totals[.day]?.input == 4500, "combined token kinds must add both tools")
         expect(combined.previousTotals[.day] == 1000, "combined previous day must add both tools")
         expect(abs(combined.tokenTrend(.day) - 3.5) < 1e-9, "combined trend must compare combined totals")
-        expect(combined.costs[.day] == (claude.costs[.day] ?? 0) + (codex.costs[.day] ?? 0),
-               "unpriced models must not hide the combined cost")
+        expect(combined.costs[.day] == 0.014 && combined.partialCosts.contains(.day), "combined cost retains the known subtotal")
         let hour = Calendar.current.component(.hour, from: noon)
         let bar = combined.buckets[.day]?[hour]
         expect(bar?.byTool[.claudeCode] == 3000 && bar?.byTool[.codex] == 1500 && bar?.tokens == 4500,

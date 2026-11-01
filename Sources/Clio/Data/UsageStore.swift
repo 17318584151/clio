@@ -9,11 +9,11 @@ actor LogReaders {
     private let codex: CodexReader
 
     private var codexQuota: RateLimitSnapshot?
-    private var codexRemainingResets: Int?
     private var parsed: Result?
     private var cacheKey: UsageCacheKey?
     private var cachedSnapshots: [ToolSnapshot] = []
     private var cachedCombined = UsageSummary.empty
+    private var cachedCategories: [CategoryUsage] = []
 
     private struct UsageCacheKey: Equatable {
         var claudeRevision: Int
@@ -22,6 +22,7 @@ actor LogReaders {
         var history: [Date: Int]
         var claudeLedger: UsageLedger?
         var codexLedger: UsageLedger?
+        var categoryLedger: CategoryLedger?
         var retentionDays: Int?
         var day: Date
         var calendar: Calendar
@@ -63,9 +64,10 @@ actor LogReaders {
         var storedClaude = UsageLedger.load(for: .claudeCode)
         var storedCodex = UsageLedger.load(for: .codex)
         let retentionDays = UsageLedger.retentionDays()
+        let categoryLedger = CategoryLedger.load()
         var key = UsageCacheKey(claudeRevision: claude.revision, codexRevision: codex.revision,
                                 prices: prices, history: history, claudeLedger: storedClaude,
-                                codexLedger: storedCodex, retentionDays: retentionDays,
+                                codexLedger: storedCodex, categoryLedger: categoryLedger, retentionDays: retentionDays,
                                 day: calendar.startOfDay(for: now), calendar: calendar)
         let reuseUsage = key == cacheKey
 
@@ -91,13 +93,8 @@ actor LogReaders {
             if ledger != storedCodex { ledger.save(for: .codex) }
             storedCodex = ledger
             var config = quota[.codex] ?? .init()
-            let latest = RateLimitSnapshot.latest([config.rateLimits, parsed.codexQuota, codexQuota].compactMap { $0 },
-                                                   now: now, maxAge: quotaMaxAge)
-            let resetUsed = config.remainingResets.flatMap { count in codexRemainingResets.map { count < $0 } } ?? false
-            let afterReset = config.rateLimits.flatMap { api in latest.map { $0.updatedAt >= api.updatedAt } } ?? false
-            codexQuota = latest?.stabilized(against: codexQuota, now: now,
-                                            allowsDecrease: resetUsed && afterReset)
-            if let count = config.remainingResets, !resetUsed || afterReset { codexRemainingResets = count }
+            codexQuota = RateLimitSnapshot.latest([config.rateLimits, parsed.codexQuota, codexQuota].compactMap { $0 },
+                                                  now: now, maxAge: quotaMaxAge)
             config.rateLimits = codexQuota
             snapshots.append(DashboardBuilder.snapshot(tool: .codex,
                                                        events: parsed.codexEvents,
@@ -109,13 +106,16 @@ actor LogReaders {
             if !reuseUsage { events += parsed.codexEvents }
         }
         if !reuseUsage {
-            cachedCombined = DashboardBuilder.combined(snapshots.map(\.usage), events: events, now: now, calendar: calendar)
+            cachedCategories = DashboardBuilder.categorized([
+                (.claudeCode, parsed.claudeEvents, storedClaude), (.codex, parsed.codexEvents, storedCodex)
+            ], prices: prices, now: now, calendar: calendar, verified: categoryLedger)
+            cachedCombined = DashboardBuilder.combined(cachedCategories.map(\.usage), events: events, now: now, calendar: calendar)
         }
         cachedSnapshots = snapshots
         key.claudeLedger = storedClaude
         key.codexLedger = storedCodex
         cacheKey = key
-        return Dashboard(snapshots: snapshots, combined: cachedCombined, updatedAt: now)
+        return Dashboard(snapshots: snapshots, combined: cachedCombined, updatedAt: now, categories: cachedCategories)
     }
 }
 

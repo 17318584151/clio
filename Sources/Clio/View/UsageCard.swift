@@ -7,7 +7,7 @@ struct UsageCard: View {
     /// Every tool together.
     var usage: UsageSummary
     /// Each tool on its own, split out beneath the total when there are two.
-    var parts: [ToolSnapshot]
+    var parts: [CategoryUsage]
     @Binding var granularity: Granularity
     var customRange: Binding<UsageDateRange?> = .constant(nil)
     var isDatePickerPresented: Binding<Bool> = .constant(false)
@@ -61,7 +61,7 @@ struct UsageCard: View {
         guard parts.count > 1, hasDetails else { return [] }
         return parts.compactMap { part in
             let cost = part.usage.costs[granularity]
-            return cost == 0 ? nil : TipRow(tool: part.tool, value: Format.money(cost))
+            return cost == 0 ? nil : TipRow(tool: part.tool, value: cost == nil ? "-" : Format.money(cost))
         }
     }
 
@@ -110,13 +110,12 @@ struct UsageCard: View {
                         .foregroundStyle(theme.textTertiary)
                         .frame(height: 14)
                     let cost = usage.costs[granularity]
-                    RollingNumber(value: cost ?? 0) { cost == nil ? Format.money(nil) : Format.money($0) }
+                    RollingNumber(value: cost ?? 0) { cost == nil && hasDetails ? "-" : Format.money(cost == nil ? nil : $0) }
                         .animation(Motion.spring(Motion.figures, reduce: reduceMotion), value: granularity)
                         .font(.system(size: 14, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(theme.cost)
                         .lineLimit(1)
-                        .help("按公开单价估算，未匹配到价格的模型按 0 计入费用")
                 }
                 .fixedSize()
                 .hoverTip(costSplit, alignment: .topTrailing)
@@ -203,7 +202,7 @@ private struct UsageChart: View {
     var buckets: [Bucket]
     var granularity: Granularity
     /// Stacked bottom-up in this order, each in its own color.
-    var tools: [Tool]
+    var tools: [ModelCategory]
 
     @State private var hovered: Int?
     @State private var plotWidth: CGFloat = 0
@@ -232,7 +231,7 @@ private struct UsageChart: View {
                 // bar from the height it had.
                 HStack(alignment: .bottom, spacing: spacing) {
                     ForEach(Array(buckets.enumerated()), id: \.offset) { index, bucket in
-                        StackedBar(shares: tools.map { (theme.series($0), bucket.byTool[$0] ?? 0) },
+                        StackedBar(shares: tools.map { (theme.categorySeries($0), bucket.byTool[$0] ?? 0) },
                                    height: max(0, 48 * CGFloat(bucket.tokens) / CGFloat(peak)))
                             .frame(maxWidth: 18)
                             .opacity(hovered == nil || hovered == index ? 1 : 0.4)
@@ -367,6 +366,7 @@ private struct StackedBar: View {
 /// Share bar plus one row per model, measured in whichever of tokens or
 /// spend the header's switch selects.
 struct ModelBreakdownCard: View {
+    @EnvironmentObject private var prefs: Preferences
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var usage: UsageSummary
@@ -405,11 +405,22 @@ struct ModelBreakdownCard: View {
 
     var body: some View {
         Card(spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .center, spacing: 12) {
                 Text("模型明细 · \(granularity.title)")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.textSecondary)
-                Spacer()
+                Spacer(minLength: 4)
+                HStack(spacing: 5) {
+                    Text("显示速度")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.textSecondary)
+                    Toggle("显示速度", isOn: $prefs.showModelSpeed)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .fixedSize()
+                }
+                .fixedSize()
                 Button {
                     basis = basis == .tokens ? .cost : .tokens
                 } label: {
@@ -420,12 +431,11 @@ struct ModelBreakdownCard: View {
                     }
                     .font(.system(size: 11))
                 }
-                .buttonStyle(QuietButtonStyle())
-                // Back over the style's 12pt margin, so the label keeps to the
-                // card's edge; the taller frame sits half a point high on the row.
-                .offset(x: 12, y: 0.5)
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.textSecondary)
+                .frame(height: 18)
             }
-            .frame(height: 14)
+            .frame(height: 18)
 
             if usage.unavailableDetails.contains(granularity) || models.isEmpty {
                 Text(usage.unavailableDetails.contains(granularity)
@@ -455,37 +465,41 @@ struct ModelBreakdownCard: View {
                 .frame(height: 5)
 
                 ForEach(visibleModels) { model in
-                    HStack(spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
                         HStack(spacing: 7) {
                             Circle()
                                 .fill(color(model))
                                 .frame(width: 6, height: 6)
-                            Text(model.displayName)
-                                .font(.system(size: 12, weight: .medium))
+                            ModelName(text: model.displayName)
                                 .foregroundStyle(theme.textPrimary)
                                 .lineLimit(1)
                         }
                         Spacer(minLength: 0)
                         // Fixed numeric columns keep model, tokens, cost and speed on one row.
-                        Text(Format.compact(model.tokens))
+                        Text(Format.modelTokens(model.tokens))
                             .font(.system(size: 12))
                             .monospacedDigit()
                             .foregroundStyle(basis == .tokens ? theme.textPrimary : theme.textSecondary)
+                            .lineLimit(1)
                             .frame(width: 54, alignment: .trailing)
-                        Text(Format.money(model.cost))
+                            .contentShape(Rectangle())
+                            .hoverTip(isEnabled: true, alignment: .topTrailing) {
+                                Text(Format.grouped(model.tokens))
+                                    .fixedSize()
+                            }
+                        Text(model.cost == nil ? "-" : Format.money(model.cost))
                             .font(.system(size: 12))
                             .monospacedDigit()
                             .foregroundStyle(basis == .cost ? theme.textPrimary : theme.textSecondary)
                             .frame(width: 48, alignment: .trailing)
-                        Text(Format.outputSpeed(model.outputSpeed))
-                            .font(.system(size: 11))
-                            .monospacedDigit()
-                            .foregroundStyle(theme.textSecondary)
-                            .lineLimit(1)
-                            .frame(width: 72, alignment: .trailing)
-                            .help(
-                                "所选时段内此模型的平均输出速度，按会话日志估算，含首字等待，并扣除系统电源记录中的休眠时间。仅统计输出至少 200 Token、清醒耗时 1 秒至 1 小时的记录。有效样本：\(model.outputSpeed.samples)；无有效样本时显示 —。"
-                            )
+                        if prefs.showModelSpeed {
+                            Text(Format.outputSpeed(model.outputSpeed))
+                                .font(.system(size: 11))
+                                .monospacedDigit()
+                                .foregroundStyle(theme.textSecondary)
+                                .lineLimit(1)
+                                .frame(width: 44, alignment: .trailing)
+                        }
                     }
                     .frame(height: 17)
                 }

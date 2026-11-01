@@ -25,7 +25,11 @@ enum DashboardBuilder {
                          cachedUsage: UsageSummary? = nil,
                          now: Date = Date(),
                          calendar: Calendar = .current) -> ToolSnapshot {
-        let sorted = cachedUsage?.rangeSource?.events ?? events.sorted { $0.timestamp < $1.timestamp }
+        let sorted = cachedUsage?.rangeSource?.events ?? events.map { event in
+            var record = event
+            if record.source == nil { record.source = tool }
+            return record
+        }.sorted { $0.timestamp < $1.timestamp }
         let live = quota.rateLimits
 
         return ToolSnapshot(
@@ -35,13 +39,13 @@ enum DashboardBuilder {
                 ? fiveHourWindow(sorted, rejections: rejections, live: live?.fiveHour, now: now) : nil,
             week: weekWindow(sorted, live: live?.sevenDay, now: now, calendar: calendar),
             modelQuota: modelQuotaWindow(sorted, live: live, now: now, calendar: calendar),
-            usage: cachedUsage ?? usage(tool: tool, sorted, prices: prices, ledger: ledger, now: now, calendar: calendar),
+            usage: cachedUsage ?? usage(tool: ModelCategory(legacyTool: tool), sorted, prices: prices, ledger: ledger, now: now, calendar: calendar),
             updatedAt: now,
             remainingResets: quota.remainingResets
         )
     }
 
-    private static func usage(tool: Tool,
+    static func usage(tool: ModelCategory,
                               _ sorted: [UsageEvent],
                               prices: PriceTable,
                               ledger: UsageLedger?,
@@ -50,6 +54,7 @@ enum DashboardBuilder {
         var totals: [Granularity: TokenCounts] = [:]
         var previousTotals: [Granularity: Int] = [:]
         var costs: [Granularity: Double] = [:]
+        var partialCosts: Set<Granularity> = []
         var buckets: [Granularity: [Bucket]] = [:]
         var models: [Granularity: [ModelUsage]] = [:]
 
@@ -62,6 +67,7 @@ enum DashboardBuilder {
                                      granularity: granularity, range: current, calendar: calendar)
             totals[granularity] = selected.counts
             costs[granularity] = selected.cost
+            if selected.hasUnpricedUsage { partialCosts.insert(granularity) }
             previousTotals[granularity] = ledger?.tokens(in: previous, calendar: calendar) ?? sorted
                 .filter { previous.contains($0.timestamp) }
                 .reduce(0) { $0 + $1.counts.total }
@@ -80,7 +86,57 @@ enum DashboardBuilder {
                             activity: activity(sorted, now: now, calendar: calendar),
                             unavailableDetails: unavailableDetails,
                             rangeSource: UsageRangeSource(tool: tool, events: sorted, prices: prices, ledger: ledger),
-                            outputSpeeds: speeds)
+                            outputSpeeds: speeds, partialCosts: partialCosts)
+    }
+
+    static func categorized(_ sources: [(Tool, [UsageEvent], UsageLedger?)], prices: PriceTable,
+                            now: Date, calendar: Calendar, verified: CategoryLedger? = nil) -> [CategoryUsage] {
+        var events: [ModelCategory: [UsageEvent]] = [:]
+        var days: [ModelCategory: [String: Int]] = [:]
+        var legacyDays: [ModelCategory: [String: Int]] = [:]
+        let verifiedDays = verified?.timeZone == calendar.timeZone.identifier ? verified?.days ?? [:] : [:]
+        for (source, records, ledger) in sources {
+            var scanned: [String: Int] = [:]
+            for event in records {
+                var record = event
+                if record.source == nil { record.source = source }
+                let key = UsageLedger.key(record.timestamp, calendar)
+                scanned[key, default: 0] += record.counts.total
+                let category = record.category
+                events[category, default: []].append(record)
+                days[category, default: [:]][key, default: 0] += record.counts.total
+            }
+            for (day, total) in ledger?.days ?? [:] {
+                let residual = total - (scanned[day] ?? 0)
+                if residual > 0 {
+                    legacyDays[ModelCategory(legacyTool: source), default: [:]][day, default: 0] += residual
+                }
+            }
+        }
+        var restoredDays: Set<String> = []
+        for (day, totals) in verifiedDays {
+            let observed = ModelCategory.allCases.reduce(0) {
+                $0 + (days[$1]?[day] ?? 0) + (legacyDays[$1]?[day] ?? 0)
+            }
+            guard totals.values.reduce(0, +) >= observed,
+                  ModelCategory.allCases.allSatisfy({ (totals[$0.rawValue] ?? 0) >= (days[$0]?[day] ?? 0) })
+            else { continue }
+            restoredDays.insert(day)
+            for category in ModelCategory.allCases {
+                days[category, default: [:]][day] = totals[category.rawValue] ?? 0
+            }
+        }
+        for (category, totals) in legacyDays {
+            for (day, tokens) in totals where !restoredDays.contains(day) {
+                days[category, default: [:]][day, default: 0] += tokens
+            }
+        }
+        guard !days.isEmpty else { return [] }
+        return ModelCategory.allCases.map { category in
+            CategoryUsage(tool: category, usage: usage(tool: category,
+                (events[category] ?? []).sorted { $0.timestamp < $1.timestamp }, prices: prices,
+                ledger: UsageLedger(days: days[category] ?? [:]), now: now, calendar: calendar))
+        }
     }
 
     /// The tools' usage added together. Active time is worked out again from
@@ -92,6 +148,7 @@ enum DashboardBuilder {
         var totals: [Granularity: TokenCounts] = [:]
         var previousTotals: [Granularity: Int] = [:]
         var costs: [Granularity: Double] = [:]
+        var partialCosts: Set<Granularity> = []
         var buckets: [Granularity: [Bucket]] = [:]
         var models: [Granularity: [ModelUsage]] = [:]
 
@@ -102,9 +159,11 @@ enum DashboardBuilder {
                 : parts.reduce(OutputSpeed()) { $0 + ($1.outputSpeeds[granularity] ?? OutputSpeed()) }
             totals[granularity] = parts.reduce(into: TokenCounts()) { $0 += $1.totals[granularity] ?? TokenCounts() }
             previousTotals[granularity] = parts.reduce(0) { $0 + ($1.previousTotals[granularity] ?? 0) }
-            costs[granularity] = parts.reduce(Optional(0.0)) { sum, part in
-                sum.flatMap { total in part.costs[granularity].map { total + $0 } }
-            }
+            let costParts = parts.filter { ($0.totals[granularity]?.total ?? 0) > 0 }
+            let cost = CostTotal(costParts.map { $0.costs[granularity] },
+                                 hasUnpricedUsage: costParts.contains { $0.partialCosts.contains(granularity) })
+            costs[granularity] = cost.value
+            if cost.isPartial { partialCosts.insert(granularity) }
 
             // Every tool's chart covers the same period, so bars line up by position.
             let charts = parts.compactMap { $0.buckets[granularity] }
@@ -126,8 +185,10 @@ enum DashboardBuilder {
                 merged[model.model] = ModelUsage(model: model.model,
                                                  displayName: model.displayName,
                                                  tokens: existing.tokens + model.tokens,
-                                                 cost: existing.cost.flatMap { cost in model.cost.map { cost + $0 } },
-                                                 outputSpeed: existing.outputSpeed + model.outputSpeed)
+                                                 cost: CostTotal([existing.cost, model.cost]).value,
+                                                 outputSpeed: existing.outputSpeed + model.outputSpeed,
+                                                 sources: mergedSources(existing.sources + model.sources),
+                                                 hasUnpricedUsage: existing.hasUnpricedUsage || model.hasUnpricedUsage || existing.cost == nil || model.cost == nil)
             }
             models[granularity] = unavailableDetails.contains(granularity) ? [] : merged.values.sorted { $0.tokens > $1.tokens }
         }
@@ -140,7 +201,7 @@ enum DashboardBuilder {
                             dailyTokens: parts.reduce(into: [:]) { $0.merge($1.dailyTokens, uniquingKeysWith: +) },
                             activity: activity(events, now: now, calendar: calendar),
                             unavailableDetails: unavailableDetails,
-                            outputSpeeds: speeds)
+                            outputSpeeds: speeds, partialCosts: partialCosts)
     }
 
     /// Applies a custom range without changing today's activity or the heatmap.
@@ -155,23 +216,25 @@ enum DashboardBuilder {
         } else {
             let total = usage.dailyTokens.filter { interval.contains($0.key) }.values.reduce(0, +)
             selected = PeriodUsage(counts: TokenCounts(reportedTotal: total), cost: nil, buckets: [],
-                                   models: [], hasDetails: false)
+                                   models: [], hasDetails: false, hasUnpricedUsage: total > 0)
         }
         var totals = usage.totals
         var costs = usage.costs
+        var partialCosts = usage.partialCosts
         var buckets = usage.buckets
         var models = usage.models
         var unavailable = usage.unavailableDetails
         var speeds = usage.outputSpeeds
         totals[.custom] = selected.counts
         costs[.custom] = selected.cost
+        if selected.hasUnpricedUsage { partialCosts.insert(.custom) } else { partialCosts.remove(.custom) }
         buckets[.custom] = selected.buckets
         models[.custom] = selected.models
         speeds[.custom] = selected.speed
         if selected.hasDetails { unavailable.remove(.custom) } else { unavailable.insert(.custom) }
         return UsageSummary(totals: totals, previousTotals: usage.previousTotals, costs: costs, buckets: buckets,
                             models: models, dailyTokens: usage.dailyTokens, activity: usage.activity,
-                            unavailableDetails: unavailable, rangeSource: usage.rangeSource, outputSpeeds: speeds)
+                            unavailableDetails: unavailable, rangeSource: usage.rangeSource, outputSpeeds: speeds, partialCosts: partialCosts)
     }
 
     private struct PeriodUsage {
@@ -181,9 +244,10 @@ enum DashboardBuilder {
         let models: [ModelUsage]
         let hasDetails: Bool
         var speed = OutputSpeed()
+        var hasUnpricedUsage = false
     }
 
-    private static func aggregate(_ events: [UsageEvent], tool: Tool, prices: PriceTable, ledger: UsageLedger?,
+    private static func aggregate(_ events: [UsageEvent], tool: ModelCategory, prices: PriceTable, ledger: UsageLedger?,
                                   granularity: Granularity, range: Range<Date>, calendar: Calendar) -> PeriodUsage {
         let selected = events.filter { range.contains($0.timestamp) }
         var scanned: [Date: Int] = [:]
@@ -205,9 +269,11 @@ enum DashboardBuilder {
                 return Bucket(id: bar.id, label: bar.label, byTool: [tool: daily[day] ?? 0])
             }
         }
-        return PeriodUsage(counts: counts, cost: missing ? nil : cost(of: selected, prices: prices), buckets: chart,
+        let cost = CostTotal(selected.map { prices.cost($0.counts, model: $0.model) }, hasUnpricedUsage: missing)
+        return PeriodUsage(counts: counts, cost: missing && selected.isEmpty ? nil : cost.value, buckets: chart,
                            models: missing ? [] : breakdown(selected, prices: prices), hasDetails: !missing,
-                           speed: missing ? OutputSpeed() : selected.reduce(into: OutputSpeed()) { $0.include($1) })
+                           speed: missing ? OutputSpeed() : selected.reduce(into: OutputSpeed()) { $0.include($1) },
+                           hasUnpricedUsage: cost.isPartial)
     }
 
     // MARK: - Periods
@@ -254,16 +320,11 @@ enum DashboardBuilder {
     // MARK: - Aggregations
 
     private static func cost(of events: [UsageEvent], prices: PriceTable) -> Double? {
-        var total = 0.0
-        for event in events {
-            guard let cost = prices.cost(event.counts, model: event.model) else { return nil }
-            total += cost
-        }
-        return total
+        CostTotal(events.map { prices.cost($0.counts, model: $0.model) }).value
     }
 
     private static func bucket(_ events: [UsageEvent],
-                               tool: Tool,
+                               tool: ModelCategory,
                                granularity: Granularity,
                                range: Range<Date>,
                                calendar: Calendar) -> [Bucket] {
@@ -304,24 +365,37 @@ enum DashboardBuilder {
         }
     }
 
-    private static func breakdown(_ events: [UsageEvent], prices: PriceTable) -> [ModelUsage] {
-        var tokens: [String: Int] = [:]
-        var spend: [String: Double] = [:]
-        var speeds: [String: OutputSpeed] = [:]
-        for event in events {
-            tokens[event.model, default: 0] += event.counts.total
-            speeds[event.model, default: OutputSpeed()].include(event)
-            if let cost = prices.cost(event.counts, model: event.model) {
-                spend[event.model, default: 0] += cost
+    private static func mergedSources(_ sources: [ModelSourceUsage]) -> [ModelSourceUsage] {
+        var result: [ModelSourceUsage] = []
+        for source in sources {
+            if let index = result.firstIndex(where: { $0.tool == source.tool && $0.model == source.model }) {
+                result[index].tokens += source.tokens
+                result[index].cost = CostTotal([result[index].cost, source.cost]).value
+                result[index].outputSpeed = result[index].outputSpeed + source.outputSpeed
+            } else {
+                result.append(source)
             }
         }
-        return tokens
-            .map { ModelUsage(model: $0.key,
-                              displayName: ModelNaming.displayName(for: $0.key),
-                              tokens: $0.value,
-                              cost: spend[$0.key],
-                              outputSpeed: speeds[$0.key] ?? OutputSpeed()) }
-            .sorted { $0.tokens > $1.tokens }
+        return result.sorted {
+            if $0.model != $1.model { return $0.model < $1.model }
+            return ($0.tool?.rawValue ?? "") < ($1.tool?.rawValue ?? "")
+        }
+    }
+
+    private static func breakdown(_ events: [UsageEvent], prices: PriceTable) -> [ModelUsage] {
+        Dictionary(grouping: events, by: \.modelKey).map { key, records in
+            let sources = mergedSources(records.map { event in
+                var speed = OutputSpeed()
+                speed.include(event)
+                return ModelSourceUsage(tool: event.source, model: event.model, tokens: event.counts.total,
+                                        cost: prices.cost(event.counts, model: event.model), outputSpeed: speed)
+            })
+            return ModelUsage(model: key, displayName: ModelNaming.displayName(for: key),
+                              tokens: records.reduce(0) { $0 + $1.counts.total },
+                              cost: cost(of: records, prices: prices),
+                              outputSpeed: sources.reduce(OutputSpeed()) { $0 + $1.outputSpeed }, sources: sources,
+                              hasUnpricedUsage: records.contains { prices.cost($0.counts, model: $0.model) == nil })
+        }.sorted { $0.tokens > $1.tokens }
     }
 
     /// Tokens per calendar day for the last 22 weeks — the heatmap's span.

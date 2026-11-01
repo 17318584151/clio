@@ -33,8 +33,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
         case .iconAndTodayTokens, .dualQuotaAndTodayTokens:
             return Format.compact(dashboard.combined.totals[.day]?.total ?? 0)
         case .dualQuotaAndSeparateTodayTokens:
-            return [Tool.claudeCode, .codex].map { tool in
-                Format.compact(dashboard.snapshot(for: tool)?.usage.totals[.day]?.total ?? 0, fractionDigits: 0)
+            return ModelCategory.allCases.map { category in
+                Format.compact(dashboard.usageParts.first { $0.tool == category }?.usage.totals[.day]?.total ?? 0, fractionDigits: 0)
             }.joined(separator: " ")
         }
     }
@@ -61,8 +61,9 @@ enum Appearance: String, CaseIterable, Identifiable {
 final class Preferences: ObservableObject {
     static let shared = Preferences()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
+    @Published var showModelSpeed: Bool { didSet { defaults.set(showModelSpeed, forKey: "showModelSpeed") } }
     @Published var confettiEnabled: Bool { didSet { defaults.set(confettiEnabled, forKey: "confettiEnabled") } }
     @Published var refreshInterval: TimeInterval { didSet { defaults.set(refreshInterval, forKey: "refreshInterval") } }
     /// Claude Code only; Codex polls independently.
@@ -90,8 +91,10 @@ final class Preferences: ObservableObject {
         }
     }
 
-    private init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         defaults.register(defaults: [
+            "showModelSpeed": false,
             "confettiEnabled": true,
             "refreshInterval": 30.0,
             "automaticQuotaQueries": false,
@@ -103,6 +106,7 @@ final class Preferences: ObservableObject {
             "autoCheckUpdates": true,
             "autoInstallUpdates": true,
         ])
+        showModelSpeed = defaults.bool(forKey: "showModelSpeed")
         confettiEnabled = defaults.bool(forKey: "confettiEnabled")
         refreshInterval = defaults.double(forKey: "refreshInterval")
         automaticClaudeQuotaQueries = defaults.bool(forKey: "automaticQuotaQueries")
