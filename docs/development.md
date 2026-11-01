@@ -44,7 +44,7 @@ bash Scripts/package.sh
 | 命令 | 验证范围 |
 | --- | --- |
 | `bash Scripts/test-usage-periods.sh` | 自然日周期和合并统计 |
-| `bash Scripts/test-account-quota.sh` | 多账号目录发现、身份去重、额度归属、缓存有效期与官方 CLI 回退；使用替身验证有效缓存不会启动 CLI |
+| `bash Scripts/test-account-quota.sh` | 多账号目录发现、身份去重、额度归属、手动模式旧额度保留、缓存有效期与官方 CLI 回退；使用替身验证有效缓存不会启动 CLI |
 | `bash Scripts/test-claude-usage.sh` | Claude `/usage` 调用参数、账号目录隔离、缓存时效、失败与超时；仅使用临时目录与替身进程 |
 | `bash Scripts/test-refresh.sh` | 刷新请求合并、统计缓存失效、额度重置、日志变更、Claude 查询关闭时 Codex 独立自动查询及单次手动查询；所有额度调用替换为记录器 |
 | `bash Scripts/test-usage.sh` | 历史每日记录恢复、日志读取、计时补全、休眠扣除、双来源额度冲突、窗口重置、用量聚合及里程碑 |

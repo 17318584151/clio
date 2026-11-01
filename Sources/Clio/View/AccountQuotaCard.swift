@@ -25,10 +25,10 @@ struct AccountQuotaCard: View {
                             }
                             HStack(spacing: 12) {
                                 if let fiveHour = reading.quota?.fiveHour {
-                                    window("5 小时已用", fiveHour, at: reading.quota?.updatedAt, tool: reading.account.tool)
+                                    window("5 小时已用", fiveHour, reading: reading)
                                 }
                                 if let week = reading.quota?.sevenDay {
-                                    window("本周已用", week, at: reading.quota?.updatedAt, tool: reading.account.tool)
+                                    window("本周已用", week, reading: reading)
                                 }
                             }
                             .help(details(reading))
@@ -54,9 +54,11 @@ struct AccountQuotaCard: View {
         return lines.joined(separator: "\n")
     }
 
-    private func window(_ title: String, _ value: RateLimitWindow?, at updatedAt: Date?, tool: Tool) -> some View {
-        let valid = updatedAt.map { Date().timeIntervalSince($0) < Preferences.shared.queryInterval(for: tool) * 2 } ?? false
-        let used = valid && value?.isCurrent(at: Date()) == true ? value?.fraction : nil
+    private func window(_ title: String, _ value: RateLimitWindow, reading: AccountQuota) -> some View {
+        let updatedAt = reading.quota?.updatedAt
+        let used = reading.displayedFraction(value,
+            automaticClaudeQueries: Preferences.shared.automaticClaudeQuotaQueries,
+            queryInterval: Preferences.shared.queryInterval(for: reading.account.tool))
         return VStack(spacing: 4) {
             HStack(spacing: 4) {
                 Text(title).foregroundStyle(theme.textSecondary)
@@ -75,7 +77,7 @@ struct AccountQuotaCard: View {
             HStack(spacing: 4) {
                 Text(updatedAt.map { "更新 \(Format.quotaTime($0))" } ?? "更新时间未知")
                 Spacer(minLength: 0)
-                Text(value?.resetsAt.map { $0 > Date() ? "\(Format.reset($0))重置" : "已重置，待更新" } ?? "重置时间未知")
+                Text(value.resetsAt.map { $0 > Date() ? "\(Format.reset($0))重置" : "已重置，待更新" } ?? "重置时间未知")
             }
             .font(.system(size: 9)).monospacedDigit()
             .foregroundStyle(theme.textSecondary)
@@ -84,6 +86,6 @@ struct AccountQuotaCard: View {
         .frame(maxWidth: .infinity)
         .help([title,
                updatedAt.map { "数据获取于 \(Format.stamp($0))" } ?? "更新时间未知",
-               value?.resetsAt.map { "重置于 \(Format.stamp($0))" } ?? "重置时间未知"].joined(separator: "\n"))
+               value.resetsAt.map { "重置于 \(Format.stamp($0))" } ?? "重置时间未知"].joined(separator: "\n"))
     }
 }

@@ -75,6 +75,14 @@ struct AccountQuota: Identifiable {
     var status: String
     var id: String { account.id }
 
+    func displayedFraction(_ window: RateLimitWindow, now: Date = Date(),
+                           automaticClaudeQueries: Bool, queryInterval: TimeInterval) -> Double? {
+        // Manual mode shows the last reading; its timestamp and reset warning stay visible.
+        if account.tool == .claudeCode, !automaticClaudeQueries { return window.fraction }
+        let valid = quota.map { now.timeIntervalSince($0.updatedAt) < queryInterval * 2 } ?? false
+        return valid && window.isCurrent(at: now) ? window.fraction : nil
+    }
+
     static func cached(_ account: QuotaAccount) -> AccountQuota {
         let data = try? Data(contentsOf: account.profile)
         let quota = account.tool == .claudeCode ? data.flatMap(ClaudeConfigReader.parse) : nil

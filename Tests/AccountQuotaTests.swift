@@ -53,6 +53,28 @@ enum AccountQuotaTests {
         precondition(AccountQuota.cached(QuotaAccount.read(directory: zero, home: home)!).quota?.sevenDay?.usedPercentage == 0)
 
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let oldQuota = AccountQuota(account: second,
+            quota: RateLimitSnapshot(updatedAt: now.addingTimeInterval(-86400),
+                fiveHour: RateLimitWindow(usedPercentage: 25, resetsAt: now.addingTimeInterval(-3600)),
+                sevenDay: RateLimitWindow(usedPercentage: 40, resetsAt: now.addingTimeInterval(86400)),
+                modelScoped: []), status: "仅本地缓存")
+        precondition(oldQuota.displayedFraction(oldQuota.quota!.sevenDay!, now: now,
+            automaticClaudeQueries: false, queryInterval: 900) == 0.4,
+            "manual Claude mode keeps old percentages beyond the freshness limit")
+        precondition(oldQuota.displayedFraction(oldQuota.quota!.fiveHour!, now: now,
+            automaticClaudeQueries: false, queryInterval: 900) == 0.25,
+            "manual Claude mode retains the last percentage after reset, alongside the reset warning")
+        precondition(oldQuota.displayedFraction(oldQuota.quota!.sevenDay!, now: now,
+            automaticClaudeQueries: true, queryInterval: 900) == nil,
+            "automatic Claude mode still rejects stale readings")
+        var codexQuota = oldQuota
+        codexQuota.account = accounts.first { $0.tool == .codex }!
+        precondition(codexQuota.displayedFraction(oldQuota.quota!.sevenDay!, now: now,
+            automaticClaudeQueries: false, queryInterval: 900) == nil,
+            "disabling Claude queries does not bypass Codex freshness checks")
+        precondition(oldQuota.displayedFraction(RateLimitWindow(), now: now,
+            automaticClaudeQueries: false, queryInterval: 900) == nil,
+            "a genuinely missing percentage remains unknown")
         func checkCache(_ value: [String: Any], queries: Int, _ message: String) throws {
             try write(second.profile, value)
             UsageProbe.calls = []
