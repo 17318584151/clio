@@ -33,6 +33,7 @@ final class CodexReader {
     /// Latest `total_token_usage` seen in each session file.
     private var totals: [String: [String: Int]] = [:]
     private var timers: [String: RequestTimer] = [:]
+    private var timingQualities: [String: TimingQuality] = [:]
     private let sleepHistory: () -> SleepTimeline
     private var sleeps = SleepTimeline()
 
@@ -160,6 +161,10 @@ final class CodexReader {
         }
     }
 
+    private enum TimingQuality: Int {
+        case notification, response, usageRecord
+    }
+
     /// Keep request timing per rollout; tool results mark the next request's start.
     private struct RequestTimer {
         var boundary: Date?
@@ -199,21 +204,27 @@ final class CodexReader {
             }
         }
 
-        mutating func finish(at date: Date, counts: [String: Int], sleeps: SleepTimeline) -> TimeInterval? {
+        mutating func finish(at date: Date, counts: [String: Int], sleeps: SleepTimeline)
+            -> (duration: TimeInterval, quality: TimingQuality)? {
             var end = date
-            if let toolOutput, date.timeIntervalSince(toolOutput) <= 0.1, let output { end = output }
+            var quality = TimingQuality.notification
+            if let toolOutput, date.timeIntervalSince(toolOutput) <= 0.1, let output {
+                end = output
+                quality = .response
+            }
             if let record = usageRecord,
                 ["input_tokens", "cached_input_tokens", "output_tokens"].allSatisfy({
                     (record.counts[$0] ?? 0) == (counts[$0] ?? 0)
                 })
             {
                 end = record.timestamp
+                quality = .usageRecord
             }
             let seconds = sleeps.estimatedDuration(from: start ?? boundary, to: end)
             // A delayed usage notification must not displace a newer tool result
             // or the response's actual end as the next request's boundary.
             self = RequestTimer(boundary: max(boundary ?? end, end), lastFinish: date)
-            return seconds
+            return seconds.map { (duration: $0, quality: quality) }
         }
     }
 
@@ -252,6 +263,7 @@ final class CodexReader {
             sessionIDs.removeAll()
             totals.removeAll()
             timers.removeAll()
+            timingQualities.removeAll()
             quota = nil
         }
         sleeps = currentSleeps
@@ -283,7 +295,10 @@ final class CodexReader {
         let previousCount = events.count
         let cutoff = now.addingTimeInterval(-LogScanner.retention)
         events = events.filter { $0.value.timestamp > cutoff }
-        if events.count != previousCount { revision += 1 }
+        if events.count != previousCount {
+            revision += 1
+            timingQualities = timingQualities.filter { events[$0.key] != nil }
+        }
         return Reading(events: Array(events.values), quota: quota)
     }
 
@@ -348,26 +363,30 @@ final class CodexReader {
         }
 
         guard counts.total > 0 else { return }
-        let duration = timers[file, default: RequestTimer()].finish(at: timestamp, counts: last, sleeps: sleeps)
+        let timing = timers[file, default: RequestTimer()].finish(at: timestamp, counts: last, sleeps: sleeps)
         let key = [
             String(Int64(timestamp.timeIntervalSince1970 * 1000)), currentModel,
             String(counts.input), String(counts.output), String(counts.cacheRead),
             String(counts.cacheWrite), String(last["reasoning_output_tokens"] ?? 0), String(counts.total),
         ].joined(separator: "|")
         if var existing = events[key] {
-            guard existing.estimatedDuration == nil, let duration else { return }
-            existing.estimatedDuration = duration
+            guard let timing, existing.estimatedDuration == nil
+                || timing.quality.rawValue > (timingQualities[key]?.rawValue ?? -1) else { return }
+            timingQualities[key] = timing.quality
+            guard existing.estimatedDuration != timing.duration else { return }
+            existing.estimatedDuration = timing.duration
             events[key] = existing
             revision += 1
             return
         }
         revision += 1
+        timingQualities[key] = timing?.quality
         events[key] = UsageEvent(timestamp: timestamp,
                                  model: currentModel,
                                  counts: counts,
                                  dedupeKey: key,
                                  sessionID: sessionIDs[file] ?? file,
-                                 estimatedDuration: duration)
+                                 estimatedDuration: timing?.duration)
     }
 
     /// A day or longer is weekly; shorter reported windows are five-hour quotas.

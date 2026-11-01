@@ -33,14 +33,18 @@ enum UsageTests {
         try testCodexSpeed()
         try testCodexDelayedUsageBoundary()
         try testCodexDuplicateTiming()
+        try testCodexDuplicateTimingQuality()
+        try testCodexSameTimestamp()
         try testClaudeSpeed()
         try testClaudeTimingMetadata()
+        try testClaudeSidechainTiming()
         try testCodexZeroUsageTiming()
         testSleepTimeline()
         testSleepHistoryCache()
         try testReaderSleepTiming()
         testSpeedAggregation()
         testModelOutputSpeed()
+        testOutputSpeedFormatting()
         try testCodexLargeResponseHeaders()
         try testPreparedLogScans()
         try testBufferedLogLines()
@@ -48,7 +52,7 @@ enum UsageTests {
             print("\(failures) assertions failed")
             exit(1)
         }
-        print("35 usage regression scenarios passed")
+        print("39 usage regression scenarios passed")
     }
 
     private static func record(_ type: String, at seconds: Double, payload: [String: Any]) throws -> String {
@@ -196,6 +200,68 @@ enum UsageTests {
         expect(reader.revision == completedRevision, "equivalent timed copies do not invalidate cached usage")
     }
 
+    private static func testCodexDuplicateTimingQuality() throws {
+        func lines(_ quality: Int, session: String) throws -> [String] {
+            var result = [
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"\(session)\"}}",
+                try record("turn_context", at: -100, payload: ["model": "gpt-priced"]),
+                try record("response_item", at: quality == 2 ? -90 : -80, payload: ["type": "function_call"]),
+            ]
+            if quality == 2 {
+                result.append(try record("token_usage_record", at: -90, payload: [
+                    "usage": ["input_tokens": 1000, "cached_input_tokens": 600, "output_tokens": 600],
+                ]))
+            }
+            if quality == 1 {
+                result.append(try record("response_item", at: -60, payload: ["type": "function_call_output"]))
+            }
+            result.append(try usage(-60, output: 600, total: 1600))
+            return result
+        }
+        for (first, second) in [(0, 2), (2, 0), (0, 1), (1, 2), (2, 1)] {
+            for incremental in [false, true] {
+                let base = try directories("timing-quality-\(first)-\(second)-\(incremental)")
+                _ = try log(base, "active", lines: lines(first, session: "original"))
+                let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
+                let initial = incremental ? reader.refresh(now: now).events.first : nil
+                let initialRevision = reader.revision
+                _ = try log(base, "archive", archived: true, lines: lines(second, session: "duplicate"))
+                let events = reader.refresh(now: now).events
+                let expected: TimeInterval = max(first, second) == 2 ? 10 : 20
+                expect(events.count == 1 && events.first?.estimatedDuration == expected,
+                    "duplicate timing chooses the strongest source in either scan order or incremental refresh")
+                expect(events.first?.counts.output == 600 && events.first?.counts.total == 1600
+                    && events.first?.sessionID == "original",
+                    "timing quality does not change counts or original session identity")
+                if incremental {
+                    expect(events.first?.timestamp == initial?.timestamp && events.first?.dedupeKey == initial?.dedupeKey,
+                        "timing quality preserves the original event identity")
+                    expect(second > first ? reader.revision > initialRevision : reader.revision == initialRevision,
+                        "only improved timing invalidates an incremental result")
+                }
+                let revision = reader.revision
+                _ = try log(base, "repeated", archived: true, lines: lines(0, session: "repeated"))
+                expect(reader.refresh(now: now).events.first?.estimatedDuration == expected && reader.revision == revision,
+                    "a repeated fallback cannot replace precise timing or invalidate cached usage")
+            }
+        }
+    }
+
+    private static func testCodexSameTimestamp() throws {
+        let base = try directories("codex-same-timestamp")
+        for (index, output) in [600, 800].enumerated() {
+            _ = try log(base, "request-\(index)", lines: [
+                try record("turn_context", at: -100 + Double(index * 20), payload: ["model": "gpt-priced"]),
+                try usage(-60, output: output, total: 1000 + output),
+            ])
+        }
+        let reader = CodexReader(root: base.appending(path: "sessions"), sleepHistory: { SleepTimeline() })
+        let events = reader.refresh(now: now).events
+        let speed = events.reduce(into: OutputSpeed()) { $0.include($1) }
+        expect(events.count == 2 && speed.outputTokens == 1400 && speed.duration == 60 && speed.samples == 2,
+            "different usage records with one timestamp keep separate counts and file-specific timing")
+    }
+
     private static func testClaudeSpeed() throws {
         let base = root.appending(path: "speed-claude")
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -295,6 +361,62 @@ enum UsageTests {
         expect(reader.revision > revision, "preserving Claude metadata still invalidates cached speed")
     }
 
+    private static func testClaudeSidechainTiming() throws {
+        for sidechainFirst in [false, true] {
+            for mismatched in [false, true] {
+                let base = root.appending(path: "claude-sidechain-\(sidechainFirst)-\(mismatched)")
+                try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+                let formatter = ISO8601DateFormatter()
+                func block(sidechain: Bool, at seconds: Double, index: Int) throws -> String {
+                    let object: [String: Any] = [
+                        "type": "assistant", "uuid": "block-\(sidechain)-\(index)", "parentUuid": "user",
+                        "timestamp": formatter.string(from: now.addingTimeInterval(seconds)),
+                        "sessionId": "session", "requestId": "request", "isSidechain": sidechain,
+                        "apiBlockIndex": index,
+                        "message": ["id": "message", "model": sidechain ? "side-model" : "main-model",
+                            "stop_reason": "end_turn",
+                            "usage": ["input_tokens": 10, "output_tokens": sidechain && mismatched ? 700 : 600]],
+                    ]
+                    return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+                }
+                let user: [String: Any] = ["type": "user", "uuid": "user",
+                    "timestamp": formatter.string(from: now.addingTimeInterval(-100))]
+                let sideLines = try String(decoding: JSONSerialization.data(withJSONObject: user), as: UTF8.self)
+                    + "\n" + block(sidechain: true, at: -90, index: 0) + "\n"
+                let mainLines = try block(sidechain: false, at: -80, index: 1) + "\n"
+                let firstFile = base.appending(path: sidechainFirst ? "side.jsonl" : "main.jsonl")
+                let secondFile = base.appending(path: sidechainFirst ? "main.jsonl" : "side.jsonl")
+                try Data((sidechainFirst ? sideLines : mainLines).utf8).write(to: firstFile)
+                let reader = ClaudeCodeReader(root: base, sleepHistory: { SleepTimeline() })
+                _ = reader.refresh()
+                let initialRevision = reader.revision
+                try Data((sidechainFirst ? mainLines : sideLines).utf8).write(to: secondFile)
+                let events = reader.refresh().events
+                let expected: TimeInterval? = mismatched ? nil : 10
+                expect(events.count == 1 && events.first?.estimatedDuration == expected,
+                    "matching sidechain timing survives either arrival order; different counts cannot supply timing")
+                expect(events.first?.model == "main-model" && events.first?.counts.output == 600
+                    && events.first?.sessionID == "session"
+                    && events.first?.timestamp == ISO8601.date(from: formatter.string(from: now.addingTimeInterval(-80))),
+                    "the non-sidechain copy supplies event metadata and counts")
+                expect(sidechainFirst || !mismatched ? reader.revision > initialRevision : reader.revision == initialRevision,
+                    "only a preferred copy or valid timing enrichment invalidates cached usage")
+                let fresh = ClaudeCodeReader(root: base, sleepHistory: { SleepTimeline() }).refresh().events
+                expect(fresh.count == 1 && fresh.first?.estimatedDuration == expected && fresh.first?.model == "main-model",
+                    "a complete scan preserves main metadata and matching sidechain timing")
+                let sideFile = base.appending(path: "side.jsonl")
+                try append(block(sidechain: true, at: -85, index: 1), to: sideFile)
+                let extended = reader.refresh().events
+                expect(extended.first?.estimatedDuration == (mismatched ? nil : 15)
+                    && extended.first?.timestamp == events.first?.timestamp && extended.first?.counts == events.first?.counts,
+                    "later sidechain blocks extend matching timing without moving or duplicating the main event")
+                let revision = reader.revision
+                _ = reader.refresh()
+                expect(reader.revision == revision, "unchanged sidechain copies retain cached usage")
+            }
+        }
+    }
+
     private static func testCodexZeroUsageTiming() throws {
         let base = try directories("codex-zero-timing")
         let zero: [String: Any] = [
@@ -350,6 +472,7 @@ enum UsageTests {
         expect(
             timeline.estimatedDuration(from: nil, to: date(100)) == nil, "sleep history cannot invent a missing start")
         expect(timeline.estimatedDuration(from: date(100), to: date(0)) == nil, "backwards requests remain invalid")
+        expect(timeline.estimatedDuration(from: date(100), to: date(100)) == nil, "equal timestamps have no duration")
         expect(
             timeline.estimatedDuration(from: date(100), to: date(1000)) == 900,
             "real slow requests without sleep remain eligible")
@@ -489,6 +612,7 @@ enum UsageTests {
         let today = [
             event(1000, 10), event(200, 20), event(199, 1), event(500, 0.5),
             event(500, nil), event(500, 3601), event(500, -1), event(500, .nan),
+            event(500, 0), event(500, .infinity),
         ]
         let yesterday = calendar.date(byAdding: .day, value: -1, to: noon)!
         let events = today + [event(600, 10, at: yesterday)]
@@ -530,6 +654,22 @@ enum UsageTests {
         expect(
             incomplete.models[.day]?.isEmpty == true && incomplete.outputSpeeds[.day]?.tokensPerSecond == nil,
             "combined usage with missing history cannot report another tool's speed as its overall speed")
+    }
+
+    private static func testOutputSpeedFormatting() {
+        func speed(_ tokens: Int, _ seconds: Double) -> OutputSpeed {
+            var result = OutputSpeed()
+            result.include(UsageEvent(
+                timestamp: now, model: "slow", counts: TokenCounts(output: tokens),
+                dedupeKey: UUID().uuidString, estimatedDuration: seconds))
+            return result
+        }
+        expect(Format.outputSpeed(speed(200, 500)) == "≈ 0.4 tok/s", "slow valid output does not round to zero")
+        expect(Format.outputSpeed(speed(200, 3600)) == "≈ 0.056 tok/s", "minimum eligible rate retains precision")
+        expect(Format.outputSpeed(speed(200, 250)) == "≈ 0.8 tok/s", "sub-token rates retain their fractional value")
+        expect(Format.outputSpeed(speed(200, 200)) == "≈ 1 tok/s", "one-token rate keeps integer formatting")
+        expect(Format.outputSpeed(speed(604, 10)) == "≈ 60 tok/s", "ordinary output retains integer formatting")
+        expect(Format.outputSpeed(OutputSpeed()) == "—", "missing samples remain unavailable")
     }
 
     private static func testModelOutputSpeed() {

@@ -122,7 +122,7 @@ final class ClaudeCodeReader {
         guard let stamp = object["timestamp"] as? String,
               let timestamp = ISO8601.date(from: stamp)
         else { return }
-        let duration = timing(for: file).duration(object, at: timestamp, sleeps: sleeps)
+        var duration = timing(for: file).duration(object, at: timestamp, sleeps: sleeps)
 
         if let quota = object["quotaLimits"] as? [String: Any],
            let resets = quota["resetsAt"] as? Double {
@@ -185,17 +185,21 @@ final class ClaudeCodeReader {
             sidechainRoutes[route, default: []].append(key)
         }
         if let existing = events[key] {
-            if existing.isSidechain != isSidechain {
-                if isSidechain { return }
-            } else if existing.event.counts.total > counts.total {
-                return
-            } else if existing.event.counts.total == counts.total {
-                guard (duration ?? 0) > (existing.event.estimatedDuration ?? 0) else { return }
-                var event = existing.event
-                event.estimatedDuration = duration
-                events[key] = Entry(event: event, isSidechain: existing.isSidechain)
-                revision += 1
-                return
+            if existing.isSidechain && !isSidechain {
+                if existing.event.counts == counts {
+                    duration = [duration, existing.event.estimatedDuration].compactMap { $0 }.max()
+                }
+            } else {
+                if existing.isSidechain != isSidechain, existing.event.counts != counts { return }
+                if existing.event.counts.total > counts.total { return }
+                if existing.event.counts.total == counts.total {
+                    guard (duration ?? 0) > (existing.event.estimatedDuration ?? 0) else { return }
+                    var event = existing.event
+                    event.estimatedDuration = duration
+                    events[key] = Entry(event: event, isSidechain: existing.isSidechain)
+                    revision += 1
+                    return
+                }
             }
         }
         revision += 1
