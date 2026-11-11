@@ -80,12 +80,34 @@ enum AccountQuotaTests {
         let settings = managed.appending(path: "settings.json")
         let original = "cat | sed 's/foo/bar/'"
         try write(settings, ["statusLine": ["type": "command", "command": "\"/Applications/Clio.app/Contents/MacOS/Clio\" --statusline -- \(original)"]])
-        try StatusLineInstaller.install(at: settings, accountID: newLogin.id)
-        precondition(StatusLineInstaller.state(at: settings, accountID: newLogin.id) == .installed)
-        try StatusLineInstaller.remove(at: settings, accountID: newLogin.id)
+        try StatusLineInstaller.install(at: settings)
+        precondition(StatusLineInstaller.state(at: settings) == .installed)
+        let installed = try Data(contentsOf: settings)
+        try StatusLineInstaller.install(at: settings)
+        let reinstalled = try Data(contentsOf: settings)
+        precondition(reinstalled == installed, "installing twice does not nest wrappers")
+        try StatusLineInstaller.remove(at: settings)
         let restored = try JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any]
         precondition((restored?["statusLine"] as? [String: String])?["command"] == original,
                      "upgrading and removing the wrapper restores the original shell command")
+
+        // Orca copies the host statusLine setting into profile directories.
+        // The same command must route each invocation using CLAUDE_CONFIG_DIR.
+        let dynamicPayload = try JSONSerialization.data(withJSONObject: [
+            "rate_limits": ["five_hour": ["used_percentage": 2], "seven_day": ["used_percentage": 44]]
+        ])
+        RateLimitBridge.capture(dynamicPayload, configDirectory: managed.path, home: home, support: home)
+        precondition(RateLimitBridge.load(accountID: newLogin.id, support: home)?.fiveHour?.usedPercentage == 2)
+        precondition(RateLimitBridge.load(accountID: second.id, support: home) == pushed.quota,
+                     "switching accounts leaves the old account's snapshot untouched")
+        try write(managed.appending(path: ".claude.json"), claude("switched-again", 9))
+        let switched = QuotaAccount.read(directory: managed, home: home)!
+        RateLimitBridge.capture(dynamicPayload, configDirectory: managed.path, home: home, support: home)
+        precondition(RateLimitBridge.load(accountID: switched.id, support: home)?.sevenDay?.usedPercentage == 44,
+                     "a directory's new login works without reinstalling the wrapper")
+        RateLimitBridge.capture(dynamicPayload, configDirectory: nil, home: home, support: home)
+        precondition(RateLimitBridge.load(accountID: primary.id, support: home)?.fiveHour?.usedPercentage == 2,
+                     "the same command also routes the default login")
 
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let oldQuota = AccountQuota(account: second,

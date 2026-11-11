@@ -291,19 +291,19 @@ struct SettingsContent: View {
 
     private func statusLineButton(for account: QuotaAccount) -> some View {
         let settings = account.directory.appending(path: "settings.json")
-        let state = bridgeStates[account.id] ?? StatusLineInstaller.state(at: settings, accountID: account.id)
+        let state = bridgeStates[account.id] ?? StatusLineInstaller.state(at: settings)
         return Button(state == .installed ? "移除状态栏接入" : "接入状态栏") {
             do {
                 if state == .installed {
-                    try StatusLineInstaller.remove(at: settings, accountID: account.id)
+                    try StatusLineInstaller.remove(at: settings)
                 } else {
-                    try StatusLineInstaller.install(at: settings, accountID: account.id)
+                    try StatusLineInstaller.install(at: settings)
                 }
                 bridgeError = nil
             } catch {
                 bridgeError = "无法修改 \(account.name) 的状态栏设置：\(error.localizedDescription)"
             }
-            bridgeStates[account.id] = StatusLineInstaller.state(at: settings, accountID: account.id)
+            bridgeStates[account.id] = StatusLineInstaller.state(at: settings)
         }
         .controlSize(.small)
         .disabled(state == .unavailable)

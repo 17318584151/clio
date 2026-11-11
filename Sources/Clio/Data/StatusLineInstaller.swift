@@ -19,27 +19,29 @@ enum StatusLineInstaller {
 
     private static let marker = "--statusline"
 
-    static func state(at settingsPath: URL, accountID: String) -> State {
+    static func state(at settingsPath: URL) -> State {
         guard FileManager.default.fileExists(atPath: settingsPath.path) else { return .notInstalled }
         guard let text = try? String(contentsOf: settingsPath, encoding: .utf8),
               let root = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
         else { return .unavailable }
         let command = (root["statusLine"] as? [String: Any])?["command"] as? String
-        return command?.contains("\(marker) \(quote(accountID))") == true ? .installed : .notInstalled
+        guard let command else { return .notInstalled }
+        return command.contains("\(marker) -- ") || command.hasSuffix(" \(marker)")
+            ? .installed : .notInstalled
     }
 
-    static func install(at settingsPath: URL, accountID: String) throws {
+    static func install(at settingsPath: URL) throws {
         guard let binary = Bundle.main.executableURL?.path else { return }
         try edit(at: settingsPath) { current in
-            let wrapper = "\(quote(binary)) \(marker) \(quote(accountID))"
+            let wrapper = "\(quote(binary)) \(marker)"
             guard let original = current.flatMap(originalCommand), !original.isEmpty else { return wrapper }
             return "\(wrapper) -- /bin/sh -c \(quote(original))"
         }
     }
 
-    static func remove(at settingsPath: URL, accountID: String) throws {
+    static func remove(at settingsPath: URL) throws {
         try edit(at: settingsPath) { current in
-            guard let current, current.contains("\(marker) \(quote(accountID))") else { return current }
+            guard let current, current.contains(marker) else { return current }
             return originalCommand(current)
         }
     }
@@ -56,7 +58,7 @@ enum StatusLineInstaller {
         guard let separator = tail.range(of: " -- ") else { return nil }
         let original = tail[separator.upperBound...]
         let shell = "/bin/sh -c '"
-        if !tail.hasPrefix(" -- "), original.hasPrefix(shell), original.hasSuffix("'") {
+        if original.hasPrefix(shell), original.hasSuffix("'") {
             return original.dropFirst(shell.count).dropLast().replacingOccurrences(of: "'\\''", with: "'")
         }
         return String(original)

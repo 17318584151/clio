@@ -15,30 +15,32 @@ enum RateLimitBridge {
         return support.appending(path: "rate-limits-\(digest).json")
     }
 
-    /// `--statusline <accountID> [-- command args...]`
+    /// `--statusline [legacyAccountID] [-- command args...]`
     static func run(accountID: String?, passthrough: [String]) -> Int32 {
         let input = FileHandle.standardInput.readDataToEndOfFile()
-        if let accountID {
-            capture(input, accountID: accountID, configDirectory: ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"])
-        }
+        let configDirectory = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
+        capture(input, accountID: accountID, configDirectory: configDirectory)
         guard let command = passthrough.first else { return 0 }
         return forward(input, to: command, arguments: Array(passthrough.dropFirst()))
     }
 
-    static func capture(_ data: Data, accountID: String, configDirectory: String?,
+    static func capture(_ data: Data, accountID: String? = nil, configDirectory: String?,
                         home: URL = FileManager.default.homeDirectoryForCurrentUser, support: URL = AppPaths.support) {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let limits = root["rate_limits"] as? [String: Any]
         else { return }
         let directory = (configDirectory.map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".claude"))
             .standardizedFileURL.resolvingSymlinksInPath()
-        // The payload has no account ID. Only accept it when the login still
-        // matches the account bound to this command at installation.
+        // Orca synchronizes statusLine settings between profiles. Resolve the
+        // login from the running session's directory, not an installation ID.
+        // Legacy commands with a bound ID remain checked until reinstalled.
         let profile = ClaudeConfigReader.profile(in: directory, home: home)
         guard let data = try? Data(contentsOf: profile),
               let login = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let account = login["oauthAccount"] as? [String: Any],
-              ClaudeConfigReader.accountID(account) == accountID else { return }
+              let currentID = ClaudeConfigReader.accountID(account),
+              accountID == nil || currentID == accountID else { return }
+        let accountID = currentID
         var reading = snapshot(from: limits)
         guard reading.fiveHour?.usedPercentage != nil || reading.sevenDay?.usedPercentage != nil else { return }
         if let previous = load(accountID: accountID, support: support) {
