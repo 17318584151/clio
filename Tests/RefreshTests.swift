@@ -131,6 +131,21 @@ enum RefreshTests {
         expect(!subsequent.contains("automatic-claude") && !subsequent.contains("default-claude"),
                "turning off Claude queries prevents queued Claude accounts from launching")
         expect(subsequent.contains("automatic-codex"), "queued Codex queries continue when Claude queries are turned off")
+
+        store.start()
+        let payload = Data(#"{"rate_limits":{"five_hour":{"used_percentage":0},"seven_day":{"used_percentage":29}}}"#.utf8)
+        RateLimitBridge.capture(payload, accountID: "claude:\(accountID):", configDirectory: directory.path)
+        for _ in 0..<100 {
+            if store.accountQuotas.first(where: { $0.account.name == "query@example.com" })?.status == "状态栏推送" {
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let pushed = store.accountQuotas.first { $0.account.name == "query@example.com" }
+        expect(pushed?.quota?.sevenDay?.usedPercentage == 29 && pushed?.status == "状态栏推送",
+               "the watched feed refreshes the matching card without a manual query or timer tick")
+        expect(!recorder.calls.contains("automatic-claude") && !recorder.calls.contains("default-claude"),
+               "receiving status-line quota does not turn on Claude queries")
     }
 
     @MainActor

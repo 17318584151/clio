@@ -106,7 +106,8 @@ struct SettingsContent: View {
     @EnvironmentObject private var store: UsageStore
     @Environment(\.colorScheme) private var scheme
     @Environment(\.isSnapshot) private var isSnapshot
-    @State private var bridgeState = StatusLineInstaller.state()
+    @State private var bridgeStates: [String: StatusLineInstaller.State] = [:]
+    @State private var bridgeError: String?
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var codexHelper = CodexHelper.shared
 
@@ -130,7 +131,6 @@ struct SettingsContent: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .help(tool.logDirectoryDisplay)
-                    if tool == .claudeCode { claudeQuotaOptions }
                     if tool == .codex { codexHelperOption }
                     if tool != Tool.allCases.last { divider }
                 }
@@ -139,11 +139,11 @@ struct SettingsContent: View {
             section("账号额度") {
                 ForEach(store.accountQuotas) { reading in
                     row(reading.account.tool.displayName, detail: reading.account.name) {
+                        if reading.account.tool == .claudeCode {
+                            statusLineButton(for: reading.account)
+                        }
                         if store.isCustomAccount(reading.account) {
-                            Button("移除") { store.removeAccountDirectory(reading.account) }
-                        } else {
-                            Text(reading.account.isDefault ? "系统默认" : "自动发现")
-                                .foregroundStyle(theme.textSecondary)
+                            Button("移除目录") { store.removeAccountDirectory(reading.account) }
                         }
                     }
                 }
@@ -160,6 +160,9 @@ struct SettingsContent: View {
                 }
                 if let error = store.accountDirectoryError {
                     Text(error).font(.system(size: 11)).foregroundStyle(.red).padding(12)
+                }
+                if let bridgeError {
+                    Text(bridgeError).font(.system(size: 11)).foregroundStyle(.red).padding(12)
                 }
             }
 
@@ -279,22 +282,32 @@ struct SettingsContent: View {
         .controlSize(.small)
         .padding(20)
         .frame(width: 420, alignment: .leading)
-        .onAppear { bridgeState = StatusLineInstaller.state() }
+        .onAppear { bridgeStates.removeAll() }
         .task {
             if !isSnapshot { await codexHelper.refresh() }
         }
         .environment(\.theme, theme)
     }
 
-    private var claudeQuotaOptions: some View {
-        row("状态栏推送", detail: bridgeStatus) {
-            Button(bridgeState == .installed ? "移除" : "接入") {
-                toggleBridge()
+    private func statusLineButton(for account: QuotaAccount) -> some View {
+        let settings = account.directory.appending(path: "settings.json")
+        let state = bridgeStates[account.id] ?? StatusLineInstaller.state(at: settings, accountID: account.id)
+        return Button(state == .installed ? "移除状态栏接入" : "接入状态栏") {
+            do {
+                if state == .installed {
+                    try StatusLineInstaller.remove(at: settings, accountID: account.id)
+                } else {
+                    try StatusLineInstaller.install(at: settings, accountID: account.id)
+                }
+                bridgeError = nil
+            } catch {
+                bridgeError = "无法修改 \(account.name) 的状态栏设置：\(error.localizedDescription)"
             }
-            .controlSize(.small)
-            .disabled(bridgeState == .unavailable)
+            bridgeStates[account.id] = StatusLineInstaller.state(at: settings, accountID: account.id)
         }
-        .padding(.leading, 22)
+        .controlSize(.small)
+        .disabled(state == .unavailable)
+        .help(state == .unavailable ? "无法读取 Claude Code 配置" : "保留原有状态栏，在 Claude Code 更新状态栏时同步额度")
     }
 
     private var codexHelperOption: some View {
@@ -457,30 +470,6 @@ struct SettingsContent: View {
         case .stale: return Text("本次校验失败，沿用 \(stamp(fetched)) 的结果")
         case .builtin: return Text("尚未联网获取")
         }
-    }
-
-    private var bridgeStatus: String {
-        switch bridgeState {
-        case .installed:
-            return "已接入"
-        case .notInstalled:
-            return "未接入"
-        case .unavailable:
-            return "配置不可用"
-        }
-    }
-
-    private func toggleBridge() {
-        do {
-            if bridgeState == .installed {
-                try StatusLineInstaller.remove()
-            } else {
-                try StatusLineInstaller.install()
-            }
-        } catch {
-            // The button reflects whatever the file actually says afterwards.
-        }
-        bridgeState = StatusLineInstaller.state()
     }
 
     private func binding(_ key: ReferenceWritableKeyPath<Preferences, [String: String]>, _ tool: Tool) -> Binding<String> {

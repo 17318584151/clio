@@ -3,12 +3,13 @@ import AppKit
 // Two development entry points sit in front of the app: `--dump` prints the
 // parsed dashboard, and `--snapshot <dir>` renders each screen to PNG. Both
 // exist so the readers and the layout can be checked without the menu bar.
-if CommandLine.arguments.contains("--statusline") {
+if let index = CommandLine.arguments.firstIndex(of: "--statusline") {
     // Runs as (or in front of) Claude Code's status-line command: capture the
     // quota payload, then hand stdin to the wrapped command untouched.
     let arguments = CommandLine.arguments
     let wrapped = arguments.firstIndex(of: "--").map { Array(arguments[(arguments.index(after: $0))...]) } ?? []
-    exit(RateLimitBridge.run(passthrough: wrapped))
+    let accountID = arguments.dropFirst(index + 1).first.flatMap { $0 == "--" ? nil : $0 }
+    exit(RateLimitBridge.run(accountID: accountID, passthrough: wrapped))
 } else if CommandLine.arguments.contains("--dump") {
     MainActor.assumeIsolated { DashboardDump.run() }
 } else if let index = CommandLine.arguments.firstIndex(of: "--snapshot"),

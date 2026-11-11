@@ -31,12 +31,11 @@ struct QuotaAccount: Identifiable, Equatable {
     static func read(directory: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> QuotaAccount? {
         let directory = directory.standardizedFileURL.resolvingSymlinksInPath()
         let defaultClaude = home.appending(path: ".claude").standardizedFileURL.resolvingSymlinksInPath()
-        let profile = directory == defaultClaude ? home.appending(path: ".claude.json") : directory.appending(path: ".claude.json")
+        let profile = ClaudeConfigReader.profile(in: directory, home: home)
         if let root = object(profile), let account = root["oauthAccount"] as? [String: Any],
-           let uuid = account["accountUuid"] as? String, !uuid.isEmpty {
-            let organization = account["organizationUuid"] as? String ?? ""
-            return QuotaAccount(id: "claude:\(uuid):\(organization)", tool: .claudeCode,
-                name: account["emailAddress"] as? String ?? "Claude · \(uuid.prefix(8))",
+           let id = ClaudeConfigReader.accountID(account) {
+            return QuotaAccount(id: id, tool: .claudeCode,
+                name: account["emailAddress"] as? String ?? "Claude · \(id.dropFirst("claude:".count).prefix(8))",
                 directory: directory, profile: profile, isDefault: directory == defaultClaude)
         }
         let auth = directory.appending(path: "auth.json")
@@ -83,13 +82,17 @@ struct AccountQuota: Identifiable {
         return valid && window.isCurrent(at: now) ? window.fraction : nil
     }
 
-    static func cached(_ account: QuotaAccount) -> AccountQuota {
+    static func cached(_ account: QuotaAccount, support: URL = AppPaths.support) -> AccountQuota {
         let data = try? Data(contentsOf: account.profile)
-        let quota = account.tool == .claudeCode ? data.flatMap(ClaudeConfigReader.parse) : nil
+        let cache = account.tool == .claudeCode ? data.flatMap(ClaudeConfigReader.parse) : nil
+        let feed = account.tool == .claudeCode ? RateLimitBridge.load(accountID: account.id, support: support) : nil
+        // Choose a snapshot as a unit so both windows share the shown timestamp.
+        let pushed = feed.map { $0.updatedAt > (cache?.updatedAt ?? .distantPast) } ?? false
+        let quota = pushed ? feed?.stabilized(against: cache, now: Date()) : cache
         return AccountQuota(account: account,
             quota: quota,
             plan: account.tool == .claudeCode ? data.flatMap(PlanReader.parse) : nil,
-            status: quota == nil ? "尚未查询" : "本地缓存")
+            status: pushed ? "状态栏推送" : quota == nil ? "尚未查询" : "本地缓存")
     }
 
     static func fetch(_ account: QuotaAccount, maxAge: TimeInterval = 1800, now: Date = Date(),
@@ -100,8 +103,15 @@ struct AccountQuota: Identifiable {
             if !force, ClaudeConfigReader.isFresh(local.quota, maxAge: maxAge, now: now) { return local }
             let result = UsageProbe.fetch(configDirectory: account.isDefault ? nil : account.directory, maxAge: maxAge)
             var reading = cached(account)
-            if result == nil { reading.quota = nil }
-            reading.status = result == nil ? "查询失败" : "已查询"
+            if result == nil {
+                if reading.status == "状态栏推送", ClaudeConfigReader.isFresh(reading.quota, maxAge: maxAge) {
+                    return reading
+                }
+                reading.quota = nil
+                reading.status = "查询失败"
+            } else if reading.status != "状态栏推送" {
+                reading.status = "已查询"
+            }
             return reading
         case .codex:
             let result = CodexUsageProbe.fetch(configDirectory: account.directory)

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Installs and removes the status-line wrapper in `~/.claude/settings.json`.
+/// Installs and removes the status-line wrapper in an account's settings.
 ///
 /// The wrapper is this binary in front of whatever status-line command is
 /// already configured, so Claude Code keeps rendering the same line and the
@@ -19,45 +19,63 @@ enum StatusLineInstaller {
 
     private static let marker = "--statusline"
 
-    static func state() -> State {
+    static func state(at settingsPath: URL, accountID: String) -> State {
+        guard FileManager.default.fileExists(atPath: settingsPath.path) else { return .notInstalled }
         guard let text = try? String(contentsOf: settingsPath, encoding: .utf8),
               let root = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
         else { return .unavailable }
         let command = (root["statusLine"] as? [String: Any])?["command"] as? String
-        return command?.contains(marker) == true ? .installed : .notInstalled
+        return command?.contains("\(marker) \(quote(accountID))") == true ? .installed : .notInstalled
     }
 
-    static func install() throws {
+    static func install(at settingsPath: URL, accountID: String) throws {
         guard let binary = Bundle.main.executableURL?.path else { return }
-        try edit { current in
-            guard current?.contains(marker) != true else { return current }
-            let wrapper = "\"\(binary)\" \(marker)"
-            guard let current, !current.isEmpty else { return wrapper }
-            return "\(wrapper) -- \(current)"
+        try edit(at: settingsPath) { current in
+            let wrapper = "\(quote(binary)) \(marker) \(quote(accountID))"
+            guard let original = current.flatMap(originalCommand), !original.isEmpty else { return wrapper }
+            return "\(wrapper) -- /bin/sh -c \(quote(original))"
         }
     }
 
-    static func remove() throws {
-        try edit { current in
-            guard let current, let range = current.range(of: "\(marker) -- ") else {
-                // Nothing was wrapped, so the whole command was ours.
-                return nil
-            }
-            return String(current[range.upperBound...])
+    static func remove(at settingsPath: URL, accountID: String) throws {
+        try edit(at: settingsPath) { current in
+            guard let current, current.contains("\(marker) \(quote(accountID))") else { return current }
+            return originalCommand(current)
         }
+    }
+
+    private static func quote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func originalCommand(_ command: String) -> String? {
+        // Both the current and legacy wrappers start with a quoted executable.
+        guard let markerRange = command.range(of: #"^('[^']*'|"[^"]*") --statusline(?= |$)"#, options: .regularExpression)
+        else { return command }
+        let tail = command[markerRange.upperBound...]
+        guard let separator = tail.range(of: " -- ") else { return nil }
+        let original = tail[separator.upperBound...]
+        let shell = "/bin/sh -c '"
+        if !tail.hasPrefix(" -- "), original.hasPrefix(shell), original.hasSuffix("'") {
+            return original.dropFirst(shell.count).dropLast().replacingOccurrences(of: "'\\''", with: "'")
+        }
+        return String(original)
     }
 
     /// Rewrites `statusLine.command`, keeping the rest of the file byte for byte
     /// when it can: the file is the user's, and it holds far more than this.
-    private static func edit(_ transform: (String?) -> String?) throws {
-        let text = (try? String(contentsOf: settingsPath, encoding: .utf8)) ?? "{}"
-        guard var root = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return }
+    private static func edit(at settingsPath: URL, _ transform: (String?) -> String?) throws {
+        let text = FileManager.default.fileExists(atPath: settingsPath.path)
+            ? try String(contentsOf: settingsPath, encoding: .utf8) : "{}"
+        guard var root = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
         var line = root["statusLine"] as? [String: Any]
         let current = line?["command"] as? String
         let updated = transform(current)
         guard updated != current else { return }
 
-        try backup()
+        try backup(settingsPath)
 
         if let updated {
             if let current, let replaced = replacing(current, with: updated, in: text) {
@@ -91,7 +109,7 @@ enum StatusLineInstaller {
         return String(text.dropFirst().dropLast())
     }
 
-    private static func backup() throws {
+    private static func backup(_ settingsPath: URL) throws {
         guard FileManager.default.fileExists(atPath: settingsPath.path) else { return }
         let stamp = DateFormatter()
         stamp.dateFormat = "yyyyMMdd-HHmmss"

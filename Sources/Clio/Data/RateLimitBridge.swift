@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// The second source of quota state: what Claude Code hands its status line.
 ///
@@ -9,31 +10,49 @@ import Foundation
 /// panel would poll on its own — but it has never carried the model-scoped
 /// window, so it complements the CLI rather than replacing it.
 enum RateLimitBridge {
-    static var snapshotPath: URL { AppPaths.support.appending(path: "rate-limits.json") }
+    private static func snapshotPath(for accountID: String, support: URL) -> URL {
+        let digest = SHA256.hash(data: Data(accountID.utf8)).map { String(format: "%02x", $0) }.joined()
+        return support.appending(path: "rate-limits-\(digest).json")
+    }
 
-    /// `--statusline [-- command args...]`
-    static func run(passthrough: [String]) -> Int32 {
+    /// `--statusline <accountID> [-- command args...]`
+    static func run(accountID: String?, passthrough: [String]) -> Int32 {
         let input = FileHandle.standardInput.readDataToEndOfFile()
-        capture(input)
+        if let accountID {
+            capture(input, accountID: accountID, configDirectory: ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"])
+        }
         guard let command = passthrough.first else { return 0 }
         return forward(input, to: command, arguments: Array(passthrough.dropFirst()))
     }
 
-    static func capture(_ data: Data) {
+    static func capture(_ data: Data, accountID: String, configDirectory: String?,
+                        home: URL = FileManager.default.homeDirectoryForCurrentUser, support: URL = AppPaths.support) {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let limits = root["rate_limits"] as? [String: Any]
         else { return }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        guard let encoded = try? encoder.encode(snapshot(from: limits)) else { return }
-        try? encoded.write(to: snapshotPath, options: .atomic)
+        let directory = (configDirectory.map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".claude"))
+            .standardizedFileURL.resolvingSymlinksInPath()
+        // The payload has no account ID. Only accept it when the login still
+        // matches the account bound to this command at installation.
+        let profile = ClaudeConfigReader.profile(in: directory, home: home)
+        guard let data = try? Data(contentsOf: profile),
+              let login = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = login["oauthAccount"] as? [String: Any],
+              ClaudeConfigReader.accountID(account) == accountID else { return }
+        var reading = snapshot(from: limits)
+        guard reading.fiveHour?.usedPercentage != nil || reading.sevenDay?.usedPercentage != nil else { return }
+        if let previous = load(accountID: accountID, support: support) {
+            reading = reading.stabilized(against: previous, now: reading.updatedAt)
+            if reading.fiveHour == previous.fiveHour && reading.sevenDay == previous.sevenDay
+                && reading.modelScoped == previous.modelScoped { return }
+        }
+        guard let encoded = try? JSONEncoder().encode(reading) else { return }
+        try? encoded.write(to: snapshotPath(for: accountID, support: support), options: .atomic)
     }
 
-    static func load() -> RateLimitSnapshot? {
-        guard let data = try? Data(contentsOf: snapshotPath) else { return nil }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(RateLimitSnapshot.self, from: data)
+    static func load(accountID: String, support: URL = AppPaths.support) -> RateLimitSnapshot? {
+        guard let data = try? Data(contentsOf: snapshotPath(for: accountID, support: support)) else { return nil }
+        return try? JSONDecoder().decode(RateLimitSnapshot.self, from: data)
     }
 
     /// Shared with `ClaudeConfigReader`: the sources report the same windows, under

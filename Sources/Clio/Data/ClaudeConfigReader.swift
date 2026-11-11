@@ -7,6 +7,16 @@ import Foundation
 /// Reading the file costs nothing, so it is the
 /// first source tried; the CLI is asked only when the cache is missing or stale.
 enum ClaudeConfigReader {
+    static func accountID(_ account: [String: Any]) -> String? {
+        guard let uuid = account["accountUuid"] as? String, !uuid.isEmpty else { return nil }
+        return "claude:\(uuid):\(account["organizationUuid"] as? String ?? "")"
+    }
+
+    static func profile(in directory: URL, home: URL) -> URL {
+        let defaultDirectory = home.appending(path: ".claude").standardizedFileURL.resolvingSymlinksInPath()
+        return (directory == defaultDirectory ? home : directory).appending(path: ".claude.json")
+    }
+
     static func read(path: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude.json")) -> RateLimitSnapshot? {
         guard let data = try? Data(contentsOf: path) else { return nil }
         return parse(data)

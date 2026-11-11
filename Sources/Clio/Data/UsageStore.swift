@@ -179,7 +179,7 @@ final class UsageStore: ObservableObject {
     }
 
     func refreshAccounts(force: Bool = false, manual: Bool = false) {
-        guard !isPreview, !accountQueryInFlight else { return }
+        guard !isPreview else { return }
         let accounts = QuotaAccount.discover(extraDirectories: extraAccountDirectories)
         let maxAge = prefs.quotaInterval
         let now = Date()
@@ -187,14 +187,21 @@ final class UsageStore: ObservableObject {
             let previous = accountQuotas.first { $0.account == account }
             guard account.tool == .claudeCode else { return previous ?? AccountQuota.cached(account) }
             var local = AccountQuota.cached(account)
+            if accountQueryInFlight, let previous,
+               (previous.quota?.updatedAt ?? .distantPast) >= (local.quota?.updatedAt ?? .distantPast) {
+                return previous
+            }
             if prefs.automaticClaudeQuotaQueries, previous?.status == "查询失败",
                !ClaudeConfigReader.isFresh(local.quota, maxAge: maxAge, now: now) {
                 local.quota = nil
                 local.status = "查询失败"
             }
-            if !manual, !prefs.automaticClaudeQuotaQueries { local.status = "仅本地缓存" }
+            if !manual, !prefs.automaticClaudeQuotaQueries, local.status != "状态栏推送" {
+                local.status = "仅本地缓存"
+            }
             return local
         }
+        guard !accountQueryInFlight else { return }
         let pending = accountQuotas.filter { reading in
             if !manual, reading.account.tool == .claudeCode {
                 guard prefs.automaticClaudeQuotaQueries else { return false }
@@ -215,7 +222,11 @@ final class UsageStore: ObservableObject {
                 self.lastAccountQueries[account.id] = Date()
                 let reading = await Task.detached(priority: .utility) { query(account, maxAge, manual) }.value
                 if let index = self.accountQuotas.firstIndex(where: { $0.account == account }) {
-                    self.accountQuotas[index] = reading
+                    let current = self.accountQuotas[index]
+                    if current.status != "状态栏推送"
+                        || (current.quota?.updatedAt ?? .distantPast) <= (reading.quota?.updatedAt ?? .distantPast) {
+                        self.accountQuotas[index] = reading
+                    }
                 }
                 if account.isDefault, account.tool == .codex {
                     self.codexReading = .init(quota: reading.quota, plan: reading.plan, remainingResets: reading.remainingResets)
@@ -243,7 +254,7 @@ final class UsageStore: ObservableObject {
     private var claudeQuota: RateLimitSnapshot?
     private var codexReading: CodexUsageProbe.Reading?
     @Published private var codexProbeInFlight = false
-    private var lastFeedUpdate: Date?
+    private var lastAccountFeeds: [String: RateLimitSnapshot] = [:]
     private var quotaWatch: DispatchSourceFileSystemObject?
     private var cancellables: Set<AnyCancellable> = []
 
@@ -257,7 +268,7 @@ final class UsageStore: ObservableObject {
         self.accountQuery = accountQuery
         self.claudeQuery = claudeQuery
         self.codexQuery = codexQuery
-        accountQuotas = QuotaAccount.discover(extraDirectories: extraAccountDirectories).map(AccountQuota.cached)
+        accountQuotas = QuotaAccount.discover(extraDirectories: extraAccountDirectories).map { AccountQuota.cached($0) }
         prefs.$refreshInterval
             .removeDuplicates()
             .sink { [weak self] interval in self?.startTimer(interval) }
@@ -295,8 +306,16 @@ final class UsageStore: ObservableObject {
     /// The directory also holds files this app writes itself, so a rebuild only
     /// happens when the feed itself changed.
     private func refreshIfFeedChanged() async {
-        guard RateLimitBridge.load()?.updatedAt != lastFeedUpdate else { return }
+        guard accountFeeds() != lastAccountFeeds else { return }
         await refresh(scanLogs: false)
+    }
+
+    private func accountFeeds() -> [String: RateLimitSnapshot] {
+        accountQuotas.reduce(into: [:]) { feeds, reading in
+            if reading.account.tool == .claudeCode {
+                feeds[reading.id] = RateLimitBridge.load(accountID: reading.id)
+            }
+        }
     }
 
     private func startTimer(_ interval: TimeInterval) {
@@ -319,10 +338,11 @@ final class UsageStore: ObservableObject {
     }
 
     private func performRefresh(scanLogs: Bool) async {
+        lastAccountFeeds = accountFeeds()
         refreshAccounts()
         let prices = await PriceService.shared.table()
-        let feed = RateLimitBridge.load()
-        lastFeedUpdate = feed?.updatedAt
+        let defaultAccount = accountQuotas.first { $0.account.tool == .claudeCode && $0.account.isDefault }
+        let feed = defaultAccount.flatMap { lastAccountFeeds[$0.id] }
         let config = ClaudeConfigReader.read()
         // Fresh enough to trust: two polling periods, so raising the interval
         // in Settings doesn't make the panel drop the percentages in between.

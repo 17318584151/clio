@@ -52,6 +52,41 @@ enum AccountQuotaTests {
         try write(zero.appending(path: ".claude.json"), claude("zero", 0))
         precondition(AccountQuota.cached(QuotaAccount.read(directory: zero, home: home)!).quota?.sevenDay?.usedPercentage == 0)
 
+        func push(_ percent: Int, accountID: String, directory: URL?) throws {
+            let payload = try JSONSerialization.data(withJSONObject: [
+                "rate_limits": [
+                    "five_hour": ["used_percentage": 0],
+                    "seven_day": ["used_percentage": percent]
+                ]
+            ])
+            RateLimitBridge.capture(payload, accountID: accountID, configDirectory: directory?.path,
+                                    home: home, support: home)
+        }
+        try push(29, accountID: second.id, directory: managed)
+        try push(36, accountID: primary.id, directory: nil)
+        let pushed = AccountQuota.cached(second, support: home)
+        precondition(pushed.quota?.fiveHour?.usedPercentage == 0 && pushed.quota?.sevenDay?.usedPercentage == 29)
+        precondition(AccountQuota.cached(primary, support: home).quota?.sevenDay?.usedPercentage == 36)
+        try push(88, accountID: second.id, directory: nil)
+        precondition(RateLimitBridge.load(accountID: second.id, support: home) == pushed.quota,
+                     "a default session cannot publish to a different account")
+        try write(second.profile, claude("new-login", 4))
+        try push(88, accountID: second.id, directory: managed)
+        let newLogin = QuotaAccount.read(directory: managed, home: home)!
+        precondition(RateLimitBridge.load(accountID: second.id, support: home) == pushed.quota
+            && RateLimitBridge.load(accountID: newLogin.id, support: home) == nil,
+            "a wrapper installed before switching accounts cannot publish for either login")
+
+        let settings = managed.appending(path: "settings.json")
+        let original = "cat | sed 's/foo/bar/'"
+        try write(settings, ["statusLine": ["type": "command", "command": "\"/Applications/Clio.app/Contents/MacOS/Clio\" --statusline -- \(original)"]])
+        try StatusLineInstaller.install(at: settings, accountID: newLogin.id)
+        precondition(StatusLineInstaller.state(at: settings, accountID: newLogin.id) == .installed)
+        try StatusLineInstaller.remove(at: settings, accountID: newLogin.id)
+        let restored = try JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any]
+        precondition((restored?["statusLine"] as? [String: String])?["command"] == original,
+                     "upgrading and removing the wrapper restores the original shell command")
+
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let oldQuota = AccountQuota(account: second,
             quota: RateLimitSnapshot(updatedAt: now.addingTimeInterval(-86400),
