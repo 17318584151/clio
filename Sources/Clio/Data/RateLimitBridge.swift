@@ -44,7 +44,12 @@ enum RateLimitBridge {
         var reading = snapshot(from: limits)
         guard reading.fiveHour?.usedPercentage != nil || reading.sevenDay?.usedPercentage != nil else { return }
         if let previous = load(accountID: accountID, support: support) {
-            reading = reading.stabilized(against: previous, now: reading.updatedAt)
+            // Each session reports only the windows its own responses carried,
+            // so a missing window is unknown here, not removed.
+            let now = reading.updatedAt
+            if reading.fiveHour == nil, previous.fiveHour?.isCurrent(at: now) == true { reading.fiveHour = previous.fiveHour }
+            if reading.sevenDay == nil, previous.sevenDay?.isCurrent(at: now) == true { reading.sevenDay = previous.sevenDay }
+            reading = reading.stabilized(against: previous, now: now)
             if reading.fiveHour == previous.fiveHour && reading.sevenDay == previous.sevenDay
                 && reading.modelScoped == previous.modelScoped { return }
         }

@@ -108,6 +108,11 @@ enum AccountQuotaTests {
         RateLimitBridge.capture(dynamicPayload, configDirectory: nil, home: home, support: home)
         precondition(RateLimitBridge.load(accountID: primary.id, support: home)?.fiveHour?.usedPercentage == 2,
                      "the same command also routes the default login")
+        let weeklyOnly = try JSONSerialization.data(withJSONObject: ["rate_limits": ["seven_day": ["used_percentage": 45]]])
+        RateLimitBridge.capture(weeklyOnly, configDirectory: nil, home: home, support: home)
+        let partial = RateLimitBridge.load(accountID: primary.id, support: home)
+        precondition(partial?.fiveHour?.usedPercentage == 2 && partial?.sevenDay?.usedPercentage == 45,
+                     "a session that has not seen the 5-hour window cannot erase it")
 
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let oldQuota = AccountQuota(account: second,
