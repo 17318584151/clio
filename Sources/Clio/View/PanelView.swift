@@ -22,7 +22,7 @@ struct PanelView: View {
     @State private var basis: ShareBasis = .tokens
     @State private var didApplyInitial = false
 
-    private var theme: Theme { Theme.resolve(scheme) }
+    private var theme: Theme { Theme.resolve(scheme, preset: prefs.themePreset) }
     /// Off-screen rendering can't draw the material, so snapshots keep the fills.
     private var usesGlass: Bool { LiquidGlass.isAvailable && !isSnapshot }
 
@@ -151,30 +151,13 @@ struct PanelView: View {
                             .font(.system(size: 10)).monospacedDigit()
                             .foregroundStyle(theme.textSecondary)
                             .help("最近一份额度数据的实际获取时间；各窗口的更新时间见下方")
-                        Button { store.queryQuotasNow() } label: {
-                            Group {
-                                if store.isQueryingQuota {
-                                    ProgressView().controlSize(.small)
-                                } else {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(theme.accent)
-                                }
-                            }
-                            .frame(width: 24, height: 24)
-                            .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: 6))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(store.isQueryingQuota)
-                        .help("手动刷新所有账号额度（会联网查询）")
-                        .accessibilityLabel(store.isQueryingQuota ? "额度查询中" : "手动刷新额度")
                     }
                     .padding(.horizontal, 4)
                     if store.accountQuotas.isEmpty {
                         SubscriptionCard(snapshots: dashboard.snapshots)
                     } else {
-                        AccountQuotaCard(accounts: store.accountQuotas)
+                        AccountQuotaCard(accounts: store.accountQuotas, queryingAccountIDs: store.queryingAccountIDs,
+                                         onRefresh: store.refreshAccount)
                     }
                 }
                 if store.isLoading {

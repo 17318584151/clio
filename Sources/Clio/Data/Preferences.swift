@@ -83,6 +83,8 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(customUsageRange?.storedDays(), forKey: "customUsageRange") }
     }
     @Published var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: "appearance") } }
+    @Published var themePreset: ThemePreset { didSet { defaults.set(themePreset.rawValue, forKey: "themePreset") } }
+    @Published var randomThemeOnLaunch: Bool { didSet { defaults.set(randomThemeOnLaunch, forKey: "randomThemeOnLaunch") } }
     @Published var autoCheckUpdates: Bool { didSet { defaults.set(autoCheckUpdates, forKey: "autoCheckUpdates") } }
     /// Applies only while `autoCheckUpdates` is on.
     @Published var autoInstallUpdates: Bool { didSet { defaults.set(autoInstallUpdates, forKey: "autoInstallUpdates") } }
@@ -109,6 +111,8 @@ final class Preferences: ObservableObject {
             "menuBarDisplay": MenuBarDisplay.iconAndTodayTokens.rawValue,
             "usageScope": UsageScope.combined.rawValue,
             "appearance": Appearance.system.rawValue,
+            "themePreset": ThemePreset.indigo.rawValue,
+            "randomThemeOnLaunch": false,
             "autoCheckUpdates": true,
             "autoInstallUpdates": true,
         ])
@@ -122,10 +126,18 @@ final class Preferences: ObservableObject {
         usageScope = UsageScope(rawValue: defaults.string(forKey: "usageScope") ?? "") ?? .combined
         customUsageRange = UsageDateRange(storedDays: defaults.stringArray(forKey: "customUsageRange") ?? [])
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
+        randomThemeOnLaunch = defaults.bool(forKey: "randomThemeOnLaunch")
+        // A launch-time pick is not saved, so the chosen preset returns once random is turned off.
+        themePreset = defaults.bool(forKey: "randomThemeOnLaunch") ? ThemePreset.allCases.randomElement()!
+            : ThemePreset(rawValue: defaults.string(forKey: "themePreset") ?? "") ?? .indigo
         autoCheckUpdates = defaults.bool(forKey: "autoCheckUpdates")
         autoInstallUpdates = defaults.bool(forKey: "autoInstallUpdates")
         planName = defaults.dictionary(forKey: "planName") as? [String: String] ?? [:]
         launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    func shuffleTheme() {
+        themePreset = ThemePreset.allCases.filter { $0 != themePreset }.randomElement()!
     }
 
     func queryInterval(for tool: Tool) -> TimeInterval {

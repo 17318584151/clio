@@ -111,7 +111,7 @@ struct SettingsContent: View {
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var codexHelper = CodexHelper.shared
 
-    private var theme: Theme { Theme.resolve(scheme) }
+    private var theme: Theme { Theme.resolve(scheme, preset: prefs.themePreset) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -185,6 +185,22 @@ struct SettingsContent: View {
                     }
                     .help("外圈 Claude · 内圈 Codex")
                 }
+                row("主题色") {
+                    HStack(spacing: 8) {
+                        Picker("", selection: $prefs.themePreset) {
+                            ForEach(ThemePreset.allCases) { Text($0.title).tag($0) }
+                        }
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .fixedSize()
+                        Button("随机", action: prefs.shuffleTheme)
+                            .controlSize(.small)
+                    }
+                }
+                row("每次启动随机主题色") {
+                    Toggle("", isOn: $prefs.randomThemeOnLaunch).labelsHidden()
+                }
+                .help("开启后每次启动随机选一个主题色，不覆盖上面保存的选择")
                 row("外观") {
                     Picker("", selection: $prefs.appearance) {
                         Text("跟随系统").tag(Appearance.system)
@@ -239,7 +255,7 @@ struct SettingsContent: View {
                     .controlSize(.small)
                     .fixedSize()
                 }
-                .help("仅控制 Claude Code。不自动查询时仅读取本地缓存；需要更新可点击额度区域右上角的刷新按钮")
+                .help("仅控制 Claude Code。不自动查询时仅读取本地缓存；需要更新可点击对应账号右侧的刷新按钮")
                 row("Codex 查询频率") {
                     Picker("", selection: $prefs.codexQuotaInterval) {
                         Text("每 15 分钟").tag(900.0)

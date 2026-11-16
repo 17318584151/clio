@@ -146,7 +146,7 @@ struct RefreshRequests {
 final class UsageStore: ObservableObject {
     @Published private(set) var accountQuotas: [AccountQuota] = []
     @Published var accountDirectoryError: String?
-    @Published private var accountQueryInFlight = false
+    @Published private(set) var queryingAccountIDs: Set<String> = []
     private var lastAccountQueries: [String: Date] = [:]
     private var lastDefaultQueries: [Tool: Date] = [:]
     private let accountQuery: @Sendable (QuotaAccount, TimeInterval, Bool) -> AccountQuota
@@ -183,11 +183,12 @@ final class UsageStore: ObservableObject {
         let accounts = QuotaAccount.discover(extraDirectories: extraAccountDirectories)
         let maxAge = prefs.quotaInterval
         let now = Date()
+        let previousAccounts = Dictionary(uniqueKeysWithValues: accountQuotas.map { ($0.id, $0) })
         accountQuotas = accounts.map { account in
-            let previous = accountQuotas.first { $0.account == account }
+            let previous = previousAccounts[account.id].flatMap { $0.account == account ? $0 : nil }
             guard account.tool == .claudeCode else { return previous ?? AccountQuota.cached(account) }
             var local = AccountQuota.cached(account)
-            if accountQueryInFlight, let previous,
+            if queryingAccountIDs.contains(account.id), let previous,
                (previous.quota?.updatedAt ?? .distantPast) >= (local.quota?.updatedAt ?? .distantPast) {
                 return previous
             }
@@ -201,8 +202,8 @@ final class UsageStore: ObservableObject {
             }
             return local
         }
-        guard !accountQueryInFlight else { return }
         let pending = accountQuotas.filter { reading in
+            guard !queryingAccountIDs.contains(reading.id) else { return false }
             if !manual, reading.account.tool == .claudeCode {
                 guard prefs.automaticClaudeQuotaQueries else { return false }
                 if ClaudeConfigReader.isFresh(reading.quota, maxAge: maxAge, now: now) { return false }
@@ -210,14 +211,21 @@ final class UsageStore: ObservableObject {
             let interval = prefs.queryInterval(for: reading.account.tool)
             return force || lastAccountQueries[reading.id].map { now.timeIntervalSince($0) >= interval } ?? true
         }
+        queryAccounts(pending, manual: manual)
+    }
+
+    private func queryAccounts(_ pending: [AccountQuota], manual: Bool) {
         guard !pending.isEmpty else { return }
-        accountQueryInFlight = true
+        queryingAccountIDs.formUnion(pending.map(\.id))
         let query = accountQuery
         Task { [weak self] in
             for item in pending {
                 guard let self else { break }
                 let account = item.account
-                if !manual, account.tool == .claudeCode, !self.prefs.automaticClaudeQuotaQueries { continue }
+                if !manual, account.tool == .claudeCode, !self.prefs.automaticClaudeQuotaQueries {
+                    self.queryingAccountIDs.remove(account.id)
+                    continue
+                }
                 let maxAge = self.prefs.queryInterval(for: account.tool)
                 self.lastAccountQueries[account.id] = Date()
                 let reading = await Task.detached(priority: .utility) { query(account, maxAge, manual) }.value
@@ -231,9 +239,11 @@ final class UsageStore: ObservableObject {
                 if account.isDefault, account.tool == .codex {
                     self.codexReading = .init(quota: reading.quota, plan: reading.plan, remainingResets: reading.remainingResets)
                 }
-                await self.refresh(scanLogs: false)
+                if account.isDefault {
+                    await self.rebuildDashboard(scanLogs: false)
+                }
+                self.queryingAccountIDs.remove(account.id)
             }
-            self?.accountQueryInFlight = false
         }
     }
     @Published private(set) var dashboard = Dashboard(snapshots: [], combined: .empty, updatedAt: .distantPast)
@@ -279,8 +289,7 @@ final class UsageStore: ObservableObject {
         refreshAccounts()
         Task { await refresh() }
         Task {
-            await PriceService.shared.refreshIfNeeded()
-            await refresh(scanLogs: false)
+            await refreshPricesIfNeeded()
         }
         startTimer(prefs.refreshInterval)
         watchQuotaFeed()
@@ -323,9 +332,19 @@ final class UsageStore: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: max(5, interval), repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.refresh()
-                await PriceService.shared.refreshIfNeeded()
-                await self?.refresh(scanLogs: false)
+                await self?.refreshPricesIfNeeded()
             }
+        }
+    }
+
+    private func refreshPricesIfNeeded() async {
+        let previous = await PriceService.shared.table()
+        await PriceService.shared.refreshIfNeeded()
+        if await PriceService.shared.table() != previous {
+            await rebuildDashboard(scanLogs: false)
+        } else {
+            priceOrigin = await PriceService.shared.origin
+            priceFetchedAt = await PriceService.shared.lastFetch
         }
     }
 
@@ -340,9 +359,15 @@ final class UsageStore: ObservableObject {
     private func performRefresh(scanLogs: Bool) async {
         lastAccountFeeds = accountFeeds()
         refreshAccounts()
+        await rebuildDashboard(scanLogs: scanLogs)
+        probeIfDue()
+    }
+
+    /// Reuse current account state; quota and price updates do not rediscover logins.
+    private func rebuildDashboard(scanLogs: Bool) async {
         let prices = await PriceService.shared.table()
         let defaultAccount = accountQuotas.first { $0.account.tool == .claudeCode && $0.account.isDefault }
-        let feed = defaultAccount.flatMap { lastAccountFeeds[$0.id] }
+        let feed = defaultAccount?.quota
         let config = ClaudeConfigReader.read()
         // Fresh enough to trust: two polling periods, so raising the interval
         // in Settings doesn't make the panel drop the percentages in between.
@@ -374,10 +399,9 @@ final class UsageStore: ObservableObject {
         isLoading = false
 
         checkMilestone(built.combined)
-        probeIfDue()
     }
 
-    var isQueryingQuota: Bool { accountQueryInFlight || probeInFlight || codexProbeInFlight }
+    var isQueryingQuota: Bool { !queryingAccountIDs.isEmpty || probeInFlight || codexProbeInFlight }
 
     /// Opening the panel checks Codex and follows Claude's automatic-query preference.
     func probeNow() {
@@ -386,11 +410,11 @@ final class UsageStore: ObservableObject {
         probeIfDue()
     }
 
-    /// One explicit query batch, without enabling future automatic queries.
-    func queryQuotasNow() {
-        guard !isPreview, !isQueryingQuota else { return }
-        refreshAccounts(force: true, manual: true)
-        probeIfDue(force: true, manual: true)
+    /// Refresh only the selected account, without enabling future automatic queries.
+    func refreshAccount(_ account: QuotaAccount) {
+        guard !isPreview, !queryingAccountIDs.contains(account.id),
+              let reading = accountQuotas.first(where: { $0.account == account }) else { return }
+        queryAccounts([reading], manual: true)
     }
 
     /// Default accounts without readable identities still use their tool's own policy.

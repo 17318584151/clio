@@ -146,22 +146,23 @@ enum UsagePeriodsTests {
         let single = DashboardBuilder.selecting(source, range: singleRange, calendar: calendar)
         expect(single.buckets[.custom]?.count == 24 && single.buckets[.custom]?[0].tokens == 100,
                "custom single day uses hourly buckets")
-        let ledger = UsageLedger(days: ["2026-09-30": 1000, "2026-10-01": 200, "2026-10-02": 300])
+        let ledger = UsageLedger(days: ["2026-09-20": 1000, "2026-09-30": 1000, "2026-10-01": 200, "2026-10-02": 300])
         let historical = DashboardBuilder.snapshot(tool: .codex, events: events, rejections: [], prices: prices,
                                                    quota: .init(), ledger: ledger, now: now, calendar: calendar).usage
         let incomplete = DashboardBuilder.selecting(historical, range: range, calendar: calendar)
-        expect(incomplete.totals[.custom]?.total == 1500, "ledger recovers missing daily total without double counting")
-        expect(incomplete.unavailableDetails.contains(.custom) && incomplete.partialCosts.contains(.custom)
+        expect(incomplete.totals[.custom]?.total == 600, "days without logs are left out when the range has logged days")
+        expect(!incomplete.unavailableDetails.contains(.custom) && !incomplete.partialCosts.contains(.custom)
                && abs((incomplete.costs[.custom] ?? -1) - 0.0006) < 1e-10
-               && incomplete.models[.custom]?.isEmpty == true, "missing log details retain a marked known subtotal without model zeros")
-        expect(incomplete.buckets[.custom]?.map(\.tokens) == [1000, 200, 300], "ledger supports daily chart")
-        let incompleteSingle = DashboardBuilder.selecting(historical, range: singleRange, calendar: calendar)
+               && incomplete.models[.custom]?.isEmpty == false, "logged days keep their details when other days have no logs")
+        expect(incomplete.buckets[.custom]?.map(\.tokens) == [100, 200, 300], "daily chart shows only logged days")
+        let gapRange = UsageDateRange(start: date(2026, 9, 20), end: date(2026, 9, 20), today: now, calendar: calendar)
+        let incompleteSingle = DashboardBuilder.selecting(historical, range: gapRange, calendar: calendar)
         expect(incompleteSingle.totals[.custom]?.total == 1000 && incompleteSingle.buckets[.custom]?.isEmpty == true,
                "ledger-only single day has total and no fabricated hourly chart")
         let combined = DashboardBuilder.combined([single, incompleteSingle], events: [], now: now, calendar: calendar)
         expect(combined.totals[.custom]?.total == 1100 && combined.buckets[.custom]?.isEmpty == true
                && combined.models[.custom]?.isEmpty == true && combined.partialCosts.contains(.custom)
-               && abs((combined.costs[.custom] ?? -1) - 0.0002) < 1e-10,
+               && abs((combined.costs[.custom] ?? -1) - 0.0001) < 1e-10,
                "mixed detail availability retains the subtotal without exposing partial hourly data")
         let zeroRange = UsageDateRange(start: date(2026, 8, 1), end: date(2026, 8, 2), today: now, calendar: calendar)
         let zero = DashboardBuilder.selecting(source, range: zeroRange, calendar: calendar)

@@ -78,7 +78,7 @@ struct UsageDatePopover: View {
         }
         return selection.range(calendar: calendar)
     }
-    private var endpointFill: Color { Color(hex: scheme == .dark ? 0x63A4FF : 0x0A84FF) }
+    private var endpointFill: Color { theme.accent }
     private var endpointText: Color { Color.white }
     private var monthStart: Date { calendar.dateInterval(of: .month, for: month)!.start }
     private var currentMonth: Date { calendar.dateInterval(of: .month, for: today)!.start }

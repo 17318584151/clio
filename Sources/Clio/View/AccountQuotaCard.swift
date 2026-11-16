@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AccountQuotaCard: View {
     let accounts: [AccountQuota]
+    let queryingAccountIDs: Set<String>
+    let onRefresh: (QuotaAccount) -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -20,20 +22,24 @@ struct AccountQuotaCard: View {
                                     .font(.system(size: 11, weight: .medium))
                                     .lineLimit(1).truncationMode(.middle)
                                     .help(details(reading))
-                                Spacer()
+                                Spacer(minLength: 4)
+                                if let quota = reading.quota {
+                                    Text("更新 \(Format.quotaTime(quota.updatedAt))")
+                                        .font(.system(size: 9)).monospacedDigit()
+                                        .foregroundStyle(theme.textSecondary)
+                                        .lineLimit(1).fixedSize()
+                                }
                                 if let plan = reading.plan { PlanBadge(text: plan) }
+                                refreshButton(reading.account)
                             }
-                            HStack(spacing: 12) {
-                                if let fiveHour = reading.quota?.fiveHour {
-                                    window("5 小时已用", fiveHour, reading: reading)
+                            if reading.quota?.fiveHour != nil || reading.quota?.sevenDay != nil {
+                                HStack(spacing: 12) {
+                                    window("5 小时已用", reading.quota?.fiveHour, reading: reading)
+                                    window("本周已用", reading.quota?.sevenDay, reading: reading)
                                 }
-                                if let week = reading.quota?.sevenDay {
-                                    window("本周已用", week, reading: reading)
-                                }
-                            }
-                            .help(details(reading))
-                            if reading.quota?.fiveHour == nil && reading.quota?.sevenDay == nil {
-                                Text(reading.status == "尚未查询" ? "额度查询中…" : "额度未知")
+                                .help(details(reading))
+                            } else {
+                                Text(queryingAccountIDs.contains(reading.id) ? "额度查询中…" : "额度未知")
                                     .foregroundStyle(theme.textSecondary)
                                     .help(details(reading))
                             }
@@ -46,6 +52,28 @@ struct AccountQuotaCard: View {
         .font(.system(size: 11))
     }
 
+    private func refreshButton(_ account: QuotaAccount) -> some View {
+        let isQuerying = queryingAccountIDs.contains(account.id)
+        return Button { onRefresh(account) } label: {
+            Group {
+                if isQuerying {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(theme.accent)
+                }
+            }
+            .frame(width: 20, height: 20)
+            .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isQuerying)
+        .help("手动刷新 \(account.name) 的额度（会联网查询）")
+        .accessibilityLabel("\(account.name)：\(isQuerying ? "额度查询中" : "手动刷新额度")")
+    }
+
     private func details(_ reading: AccountQuota) -> String {
         var lines = [reading.account.tool.displayName, reading.account.name, reading.status]
         if let quota = reading.quota { lines.append("数据获取于 \(Format.stamp(quota.updatedAt))") }
@@ -54,11 +82,10 @@ struct AccountQuotaCard: View {
         return lines.joined(separator: "\n")
     }
 
-    private func window(_ title: String, _ value: RateLimitWindow, reading: AccountQuota) -> some View {
-        let updatedAt = reading.quota?.updatedAt
-        let used = reading.displayedFraction(value,
+    private func window(_ title: String, _ value: RateLimitWindow?, reading: AccountQuota) -> some View {
+        let used = value.flatMap { reading.displayedFraction($0,
             automaticClaudeQueries: Preferences.shared.automaticClaudeQuotaQueries,
-            queryInterval: Preferences.shared.queryInterval(for: reading.account.tool))
+            queryInterval: Preferences.shared.queryInterval(for: reading.account.tool)) }
         return VStack(spacing: 4) {
             HStack(spacing: 4) {
                 Text(title).foregroundStyle(theme.textSecondary)
@@ -74,18 +101,14 @@ struct AccountQuotaCard: View {
                     }
             }
             .frame(height: 3)
-            HStack(spacing: 4) {
-                Text(updatedAt.map { "更新 \(Format.quotaTime($0))" } ?? "更新时间未知")
-                Spacer(minLength: 0)
-                Text(value.resetsAt.map { $0 > Date() ? "\(Format.reset($0))重置" : "已重置，待更新" } ?? "重置时间未知")
-            }
-            .font(.system(size: 9)).monospacedDigit()
-            .foregroundStyle(theme.textSecondary)
-            .lineLimit(1).minimumScaleFactor(0.85)
+            Text(value?.resetsAt.map { $0 > Date() ? "\(Format.reset($0))重置" : "已重置，待更新" } ?? "重置时间未知")
+                .font(.system(size: 9)).monospacedDigit()
+                .foregroundStyle(theme.textSecondary)
+                .lineLimit(1).minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
         .help([title,
-               updatedAt.map { "数据获取于 \(Format.stamp($0))" } ?? "更新时间未知",
-               value.resetsAt.map { "重置于 \(Format.stamp($0))" } ?? "重置时间未知"].joined(separator: "\n"))
+               value?.resetsAt.map { "重置于 \(Format.stamp($0))" } ?? "重置时间未知"].joined(separator: "\n"))
     }
 }

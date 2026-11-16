@@ -39,7 +39,7 @@ enum UsageTests {
         expect(selected[2].buckets[.custom]?.reduce(0, { $0 + $1.tokens }) == 20, "Other chart includes all tokens")
         let merged = DashboardBuilder.combined(selected, events: claude + codex, now: now, calendar: calendar)
         expect(merged.totals[.custom]?.total == 107, "Combined equals three categories including automatic review")
-        expect(parts.map { $0.usage.totals[.month]!.total } == [39, 65, 20], "Legacy history remains compatible")
+        expect(parts.map { $0.usage.totals[.month]!.total } == [30, 57, 20], "Legacy history days without logs are left out")
         let verified = CategoryLedger(timeZone: calendar.timeZone.identifier,
                                      days: ["2026-10-17": ["claudeCode": 30, "codex": 17, "other": 60]])
         let missing = DashboardBuilder.categorized([
@@ -716,7 +716,7 @@ enum UsageTests {
         let dayKey = String(format: "%04d-%02d-%02d", components.year!, components.month!, components.day!)
         let ledger = UsageLedger(days: [dayKey: 1_000_000])
         let partial = DashboardBuilder.snapshot(
-            tool: .codex, events: events, rejections: [], prices: prices,
+            tool: .codex, events: [], rejections: [], prices: prices,
             quota: .init(), ledger: ledger, now: noon, calendar: calendar
         ).usage
         expect(
@@ -1261,9 +1261,9 @@ enum UsageTests {
         expect(snapshot.usage.dailyTokens[calendar.startOfDay(for: date(10, 12))] == 500,
                "the heatmap does not count recent usage twice")
         expect(snapshot.usage.previousTotals[.month] == 800, "previous-month comparisons include retained history")
-        expect(snapshot.usage.totals[.month]?.total == 800 && snapshot.usage.models[.month]?.isEmpty == true
-               && snapshot.usage.costs[.month] == 0.001 && snapshot.usage.partialCosts.contains(.month) && snapshot.usage.unavailableDetails.contains(.month),
-               "selected-period total includes saved history while incomplete model and cost details stay unavailable")
+        expect(snapshot.usage.totals[.month]?.total == 500 && snapshot.usage.models[.month]?.isEmpty == false
+               && snapshot.usage.costs[.month] == 0.001 && !snapshot.usage.partialCosts.contains(.month) && !snapshot.usage.unavailableDetails.contains(.month),
+               "a period with logged days totals only those days and keeps its details")
         let empty = DashboardBuilder.snapshot(tool: .claudeCode, events: [], rejections: [], prices: prices,
             quota: .init(), ledger: ledger, now: fixtureNow, calendar: calendar)
         expect(empty.usage.dailyTokens == snapshot.usage.dailyTokens,

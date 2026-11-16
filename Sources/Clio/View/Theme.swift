@@ -67,16 +67,16 @@ struct Theme {
         segmentedSelectedText: Color(hex: 0x1D1D1F),
         badgeFill: Color(hex: 0xF2E9E4),
         badgeText: Color(hex: 0xB8572F),
-        cost: Color(hex: 0x1F8552),
+        cost: Color(hex: 0x5B44B8),
         pillFill: Color(hex: 0xE3E3E8),
         menuFill: Color(hex: 0xF6F6F8),
-        accent: Color(hex: 0x0A84FF),
+        accent: Color(hex: 0x6E56CF),
         warning: Color(hex: 0xFF9F0A),
         danger: Color(hex: 0xFF3B30),
         positive: Color(hex: 0x34C759),
         glassTint: Color.white.opacity(0.35),
-        heatmap: [Color(hex: 0xEBEBF0), Color(hex: 0xB9E3CD), Color(hex: 0x7DCBA3),
-                  Color(hex: 0x3FAA73), Color(hex: 0x1F8552)],
+        heatmap: [Color(hex: 0xEBEBF0), Color(hex: 0xDDD5F6), Color(hex: 0xB9AAEC),
+                  Color(hex: 0x9380DC), Color(hex: 0x6E56CF)],
         claudeSeries: Color(hex: 0xD97757),
         codexSeries: Color(hex: 0x0A84FF),
         modelPalette: [Color(hex: 0x1BAF7A), Color(hex: 0xEDA100), Color(hex: 0xE87BA4),
@@ -104,16 +104,16 @@ struct Theme {
         segmentedSelectedText: Color(hex: 0xF5F5F7),
         badgeFill: Color(hex: 0x4A4A4F),
         badgeText: Color(hex: 0xF5F5F7),
-        cost: Color(hex: 0x6FD09B),
+        cost: Color(hex: 0xB6A8FF),
         pillFill: Color(hex: 0x1F1F21),
         menuFill: Color(hex: 0x2C2C2E),
-        accent: Color(hex: 0x0A84FF),
+        accent: Color(hex: 0x9D8CFF),
         warning: Color(hex: 0xFF9F0A),
         danger: Color(hex: 0xFF453A),
         positive: Color(hex: 0x30D158),
         glassTint: Color.black.opacity(0.35),
-        heatmap: [Color.white.opacity(0.08), Color(hex: 0x1F5C3E), Color(hex: 0x2F8557),
-                  Color(hex: 0x3FAA73), Color(hex: 0x6FD09B)],
+        heatmap: [Color.white.opacity(0.08), Color(hex: 0x3A2F73), Color(hex: 0x5846B0),
+                  Color(hex: 0x7B67E0), Color(hex: 0xB6A8FF)],
         claudeSeries: Color(hex: 0xD0704F),
         codexSeries: Color(hex: 0x0A84FF),
         modelPalette: [Color(hex: 0x199E70), Color(hex: 0xC98500), Color(hex: 0xD55181),
@@ -122,8 +122,10 @@ struct Theme {
                        Color(hex: 0xCA73CA), Color(hex: 0xABB44E), Color(hex: 0xEC944B)]
     )
 
-    static func resolve(_ scheme: ColorScheme) -> Theme {
-        scheme == .dark ? .dark : .light
+    static func resolve(_ scheme: ColorScheme, preset: ThemePreset = .indigo) -> Theme {
+        var theme: Theme = scheme == .dark ? .dark : .light
+        preset.apply(to: &theme, dark: scheme == .dark)
+        return theme
     }
 
     /// Liquid Glass lets far more of the backdrop through than the frosted
@@ -160,6 +162,46 @@ struct Theme {
         if fraction >= 0.8 { return danger }
         if fraction >= 0.6 { return warning }
         return base ?? accent
+    }
+}
+
+/// Accent, cost and heat map colors; the neutrals and the tools' own colors stay put.
+enum ThemePreset: String, CaseIterable, Identifiable {
+    case indigo, ocean, amber, rose, forest
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .indigo: return "靛紫"
+        case .ocean: return "海洋"
+        case .amber: return "琥珀"
+        case .rose: return "玫红"
+        case .forest: return "森林"
+        }
+    }
+
+    /// Accent, cost, then the four filled heat map levels.
+    private func colors(dark: Bool) -> (accent: UInt32, cost: UInt32, heat: [UInt32]) {
+        switch (self, dark) {
+        case (.indigo, false): return (0x6E56CF, 0x5B44B8, [0xDDD5F6, 0xB9AAEC, 0x9380DC, 0x6E56CF])
+        case (.indigo, true): return (0x9D8CFF, 0xB6A8FF, [0x3A2F73, 0x5846B0, 0x7B67E0, 0xB6A8FF])
+        case (.ocean, false): return (0x0891B2, 0x0E7490, [0xCDEFF5, 0x8ED6E4, 0x3FB5CC, 0x0E7490])
+        case (.ocean, true): return (0x4CC9E0, 0x7DE0F0, [0x164E5C, 0x1F7A8C, 0x2FA3BC, 0x7DE0F0])
+        case (.amber, false): return (0xD97706, 0xB45309, [0xFBE8C4, 0xF6CD84, 0xE9A23B, 0xB45309])
+        case (.amber, true): return (0xF5B041, 0xFAD58A, [0x5E3A0B, 0x8C5A14, 0xC98A22, 0xFAD58A])
+        case (.rose, false): return (0xD6336C, 0xA61E4D, [0xFAD7E3, 0xF3A6C0, 0xE5668F, 0xA61E4D])
+        case (.rose, true): return (0xFF7AA8, 0xFFB3CC, [0x6B2040, 0x9C3560, 0xD04F85, 0xFFB3CC])
+        case (.forest, false): return (0x1F8552, 0x1F8552, [0xB9E3CD, 0x7DCBA3, 0x3FAA73, 0x1F8552])
+        case (.forest, true): return (0x3FAA73, 0x6FD09B, [0x1F5C3E, 0x2F8557, 0x3FAA73, 0x6FD09B])
+        }
+    }
+
+    func apply(to theme: inout Theme, dark: Bool) {
+        let palette = colors(dark: dark)
+        theme.accent = Color(hex: palette.accent)
+        theme.cost = Color(hex: palette.cost)
+        theme.heatmap.replaceSubrange(1..., with: palette.heat.map { Color(hex: $0) })
     }
 }
 

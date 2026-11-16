@@ -96,11 +96,13 @@ enum RefreshTests {
         defaults.set([directory.path, codexDirectory.path], forKey: "accountDirectories")
         defer { defaults.set(previousDirectories, forKey: "accountDirectories") }
         let recorder = QueryRecorder()
+        let manualGate = DispatchSemaphore(value: 0)
         let readers = LogReaders(
             claude: ClaudeCodeReader(root: root.appending(path: "no-claude-logs"), sleepHistory: { SleepTimeline() }),
             codex: CodexReader(root: root.appending(path: "no-codex-logs"), sleepHistory: { SleepTimeline() }))
         let store = UsageStore(readers: readers, accountQuery: { account, _, force in
-            recorder.record(force ? "manual" : account.tool == .claudeCode ? "automatic-claude" : "automatic-codex")
+            recorder.record(force ? "manual:\(account.id)" : account.tool == .claudeCode ? "automatic-claude" : "automatic-codex")
+            if force { manualGate.wait() }
             return AccountQuota.cached(account)
         }, claudeQuery: { _ in recorder.record("default-claude"); return nil },
            codexQuery: { recorder.record("default-codex"); return nil })
@@ -113,12 +115,30 @@ enum RefreshTests {
         expect(recorder.calls.contains("automatic-codex"), "Codex queries automatically while Claude queries are disabled")
         expect(store.accountQuotas.first { $0.account.name == "query@example.com" }?.status == "仅本地缓存",
                "offline accounts show a local-cache status instead of an endless query placeholder")
-        store.queryQuotasNow()
-        store.queryQuotasNow()
         for _ in 0..<500 where store.isQueryingQuota { try await Task.sleep(nanoseconds: 10_000_000) }
-        expect(!store.isQueryingQuota, "manual query completes")
-        expect(recorder.calls.filter { $0 == "manual" }.count == store.accountQuotas.count,
-               "manual action queries each account once and repeated clicks share the same batch")
+        let dashboardUpdatedAt = store.dashboard.updatedAt
+        let claudeAccount = store.accountQuotas.first { $0.account.name == "query@example.com" }!.account
+        let codexAccount = store.accountQuotas.first { $0.account.directory == codexDirectory.standardizedFileURL.resolvingSymlinksInPath() }!.account
+        store.refreshAccount(claudeAccount)
+        store.refreshAccount(claudeAccount)
+        expect(store.queryingAccountIDs == [claudeAccount.id], "only the selected account shows loading")
+        for _ in 0..<100 where !recorder.calls.contains("manual:\(claudeAccount.id)") {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        expect(recorder.calls.filter { $0.hasPrefix("manual:") } == ["manual:\(claudeAccount.id)"],
+               "refreshing one account never manually queries another account")
+        store.refreshAccount(codexAccount)
+        expect(store.queryingAccountIDs == [claudeAccount.id, codexAccount.id],
+               "another account can refresh while the selected account is busy")
+        manualGate.signal()
+        manualGate.signal()
+        for _ in 0..<500 where store.isQueryingQuota { try await Task.sleep(nanoseconds: 10_000_000) }
+        expect(!store.isQueryingQuota && store.queryingAccountIDs.isEmpty, "each account clears its loading state")
+        expect(store.dashboard.updatedAt == dashboardUpdatedAt,
+               "refreshing non-default accounts does not rebuild the dashboard")
+        expect(recorder.calls.filter { $0.hasPrefix("manual:") }.sorted()
+               == ["manual:\(claudeAccount.id)", "manual:\(codexAccount.id)"].sorted(),
+               "manual actions query only selected accounts once; repeated clicks share the running query")
         expect(!prefs.automaticClaudeQuotaQueries, "manual action never enables automatic querying")
         let completedCalls = recorder.calls
         store.probeNow()

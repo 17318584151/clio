@@ -256,8 +256,10 @@ enum DashboardBuilder {
         }
         let stored = (ledger?.daily(from: range.lowerBound, calendar: calendar) ?? [:])
             .filter { range.contains($0.key) }
-        let missing = stored.contains { $0.value > (scanned[$0.key] ?? 0) }
-        let daily = scanned.merging(stored, uniquingKeysWith: max)
+        // Days without logs are left out when the range has any logged day; only a range with
+        // no logs at all falls back to the stored daily totals.
+        let missing = selected.isEmpty && stored.contains { $0.value > 0 }
+        let daily = missing ? stored : scanned
         var counts = selected.reduce(into: TokenCounts()) { $0 += $1.counts }
         if missing { counts.reportedTotal = daily.values.reduce(0, +) }
         let chart: [Bucket]
