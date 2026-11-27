@@ -59,8 +59,8 @@ private struct AccountQuotaRow: View {
             }
             .frame(height: 20)
             HStack(spacing: 12) {
-                window("5 小时已用", reading.quota?.fiveHour)
-                window("本周已用", reading.quota?.sevenDay)
+                window("5 小时已用", \.fiveHour)
+                window("本周已用", \.sevenDay)
             }
         }
         .contentShape(Rectangle())
@@ -128,8 +128,9 @@ private struct AccountQuotaRow: View {
         return lines.joined(separator: "\n")
     }
 
-    private func window(_ title: String, _ value: RateLimitWindow?) -> some View {
-        let used = value.flatMap { reading.displayedFraction($0, codexQueryInterval: Preferences.shared.codexQuotaInterval) }
+    private func window(_ title: String, _ window: KeyPath<RateLimitSnapshot, RateLimitWindow?>) -> some View {
+        let value = reading.quota?[keyPath: window]
+        let used = reading.fraction(window)
         return VStack(spacing: 4) {
             HStack(spacing: 4) {
                 Text(title).foregroundStyle(theme.textSecondary)
@@ -153,5 +154,15 @@ private struct AccountQuotaRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+@MainActor
+extension AccountQuota {
+    /// The used share of one window as shown in the card and the menu bar.
+    func fraction(_ window: KeyPath<RateLimitSnapshot, RateLimitWindow?>) -> Double? {
+        quota?[keyPath: window].flatMap {
+            displayedFraction($0, codexQueryInterval: Preferences.shared.codexQuotaInterval)
+        }
     }
 }

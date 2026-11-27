@@ -176,14 +176,14 @@ struct SettingsContent: View {
                     .fixedSize()
                 }
                 if prefs.menuBarDisplay.showsQuota {
-                    row("额度预览", detail: "系统默认账号 · Claude、Codex 每周已用") {
-                        MenuBarQuotaLabel(claudeFraction: store.dashboard.snapshot(for: .claudeCode)?.week.fraction,
-                                          codexFraction: store.dashboard.snapshot(for: .codex)?.week.fraction,
+                    row("额度预览", detail: store.menuBarAccount.map { "\($0.account.name) · Orca 当前账号" } ?? "未找到 Orca 当前账号") {
+                        MenuBarQuotaLabel(fiveHourFraction: store.menuBarAccount?.fraction(\.fiveHour),
+                                          weekFraction: store.menuBarAccount?.fraction(\.sevenDay),
                                           isDark: scheme == .dark,
                                           showsPercentages: prefs.menuBarDisplay.showsQuotaPercentages,
                                           tokenText: prefs.menuBarDisplay.todayTokenText(store.dashboard))
                     }
-                    .help("外圈 Claude · 内圈 Codex")
+                    .help("外圈 5 小时 · 内圈本周")
                 }
                 row("主题色") {
                     HStack(spacing: 8) {

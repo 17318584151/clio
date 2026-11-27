@@ -160,14 +160,14 @@ enum Snapshot {
         VStack(spacing: 0) {
             ForEach([false, true], id: \.self) { dark in
                 HStack(spacing: 24) {
-                    MenuBarQuotaLabel(claudeFraction: 0.30, codexFraction: 0.12,
+                    MenuBarQuotaLabel(fiveHourFraction: 0.30, weekFraction: 0.12,
                                       isDark: dark, isSelected: true)
-                    MenuBarQuotaLabel(claudeFraction: 0.28, codexFraction: 0.66, isDark: dark)
-                    MenuBarQuotaLabel(claudeFraction: 0.92, codexFraction: 0.97, isDark: dark)
-                    MenuBarQuotaLabel(claudeFraction: nil, codexFraction: nil, isDark: dark)
-                    MenuBarQuotaLabel(claudeFraction: 0.28, codexFraction: 0.66, isDark: dark,
+                    MenuBarQuotaLabel(fiveHourFraction: 0.28, weekFraction: 0.66, isDark: dark)
+                    MenuBarQuotaLabel(fiveHourFraction: 0.92, weekFraction: 0.97, isDark: dark)
+                    MenuBarQuotaLabel(fiveHourFraction: nil, weekFraction: nil, isDark: dark)
+                    MenuBarQuotaLabel(fiveHourFraction: 0.28, weekFraction: 0.66, isDark: dark,
                                       showsPercentages: false, tokenText: Format.compact(1_243_610))
-                    MenuBarQuotaLabel(claudeFraction: 0.28, codexFraction: 0.66, isDark: dark,
+                    MenuBarQuotaLabel(fiveHourFraction: 0.28, weekFraction: 0.66, isDark: dark,
                                       showsPercentages: false,
                                       tokenText: [800_000, 443_610]
                                           .map { Format.compact($0, fractionDigits: 0) }.joined(separator: " "))

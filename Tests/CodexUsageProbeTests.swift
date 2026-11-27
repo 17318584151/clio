@@ -28,7 +28,7 @@ enum CodexUsageProbeTests {
         let snapshot = DashboardBuilder.snapshot(tool: .codex, events: [], rejections: [],
             prices: PriceTable(prices: [:]), quota: .init(planName: mapped.plan, rateLimits: mapped.quota,
                                                        remainingResets: mapped.remainingResets))
-        precondition(snapshot.remainingResets == 7 && snapshot.menuBarQuota.fraction == 0.42)
+        precondition(snapshot.remainingResets == 7 && snapshot.fiveHour?.fraction == 0.42)
         precondition(CodexUsageProbe.fetch(executable: nil) == nil)
         precondition(CodexUsageProbe.fetch(executable: URL(fileURLWithPath: "/does-not-exist/codex")) == nil)
 

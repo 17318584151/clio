@@ -1305,24 +1305,6 @@ enum UsageTests {
         let claude: Any? = snapshot([], tool: .claudeCode).fiveHour
         expect(claude != nil, "Claude Code must retain its five-hour row")
 
-        for tool in Tool.allCases {
-            let weekly = RateLimitWindow(usedPercentage: 42)
-            let both = RateLimitSnapshot(updatedAt: now, fiveHour: .init(usedPercentage: 20),
-                                         sevenDay: weekly, modelScoped: [])
-            let selected = snapshot([], tool: tool, limits: both)
-            expect(selected.menuBarQuota.fraction == 0.2 && selected.menuBarQuota.title == selected.fiveHour?.title,
-                   "\(tool) menu bar must prefer the five-hour quota")
-            let weekOnly = RateLimitSnapshot(updatedAt: now, sevenDay: weekly, modelScoped: [])
-            let fallback = snapshot([], tool: tool, limits: weekOnly)
-            expect(fallback.menuBarQuota.fraction == 0.42 && fallback.menuBarQuota.title == fallback.week.title,
-                   "\(tool) menu bar must fall back to weekly quota when five-hour percentage is absent")
-            let unused = RateLimitSnapshot(updatedAt: now, fiveHour: .init(usedPercentage: 0),
-                                           sevenDay: weekly, modelScoped: [])
-            expect(snapshot([], tool: tool, limits: unused).menuBarQuota.fraction == 0,
-                   "\(tool) zero usage is an available five-hour quota")
-            expect(snapshot([], tool: tool).menuBarQuota.fraction == nil,
-                   "\(tool) missing quota must remain unavailable")
-        }
     }
 
     private static func testUnknownPrices() {

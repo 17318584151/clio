@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Used quota: Claude on the outer ring, Codex on the inner ring.
+/// Used quota of one account: 5-hour window on the outer ring, weekly on the inner ring.
 struct MenuBarQuotaLabel: View {
-    var claudeFraction: Double?
-    var codexFraction: Double?
+    var fiveHourFraction: Double?
+    var weekFraction: Double?
     var isDark: Bool
     var isSelected = false
     var showsPercentages = true
@@ -20,12 +20,12 @@ struct MenuBarQuotaLabel: View {
     var body: some View {
         HStack(spacing: 4) {
             ZStack {
-                ring(claudeFraction, size: 16)
-                ring(codexFraction, size: 9)
+                ring(fiveHourFraction, size: 16)
+                ring(weekFraction, size: 9)
             }
             if showsPercentages {
-                percentage(claudeFraction)
-                percentage(codexFraction)
+                percentage(fiveHourFraction)
+                percentage(weekFraction)
             }
             if let tokenText {
                 Text(tokenText)

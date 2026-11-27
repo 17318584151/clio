@@ -337,12 +337,6 @@ struct ToolSnapshot {
     let updatedAt: Date
     /// Available manual resets; nil when the account did not report a count.
     var remainingResets: Int? = nil
-
-    /// Prefer the short-term allowance when its percentage is available.
-    var menuBarQuota: QuotaWindow {
-        if let fiveHour, fiveHour.fraction != nil { return fiveHour }
-        return week
-    }
 }
 
 struct Dashboard {

@@ -241,6 +241,14 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// The menu bar follows the Claude login Orca launches with, falling back to
+    /// whatever else Orca uses, then to the system Claude login.
+    var menuBarAccount: AccountQuota? {
+        let active = accountQuotas.filter { orca?.active.contains($0.id) == true }
+        return active.first { $0.account.tool == .claudeCode } ?? active.first
+            ?? accountQuotas.first { $0.account.tool == .claudeCode && $0.account.isDefault }
+    }
+
     /// Same effect as Orca's status-bar switcher: agents launched afterwards use this account.
     func useInOrca(_ account: QuotaAccount) {
         guard switchingAccountID == nil, let target = orca?.targets[account.id] else { return }

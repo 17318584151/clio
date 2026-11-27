@@ -7,7 +7,7 @@ enum MenuBarQuotaTests {
     static func main() {
         NSApplication.shared.setActivationPolicy(.prohibited)
         let renderer = ImageRenderer(content:
-            MenuBarQuotaLabel(claudeFraction: 0.30, codexFraction: 0.12, isDark: true)
+            MenuBarQuotaLabel(fiveHourFraction: 0.30, weekFraction: 0.12, isDark: true)
                 .background(Color.black))
         renderer.scale = 8
         let bitmap = NSBitmapImageRep(cgImage: renderer.cgImage!)
@@ -36,7 +36,7 @@ enum MenuBarQuotaTests {
             for (used, hex) in cases {
                 let usedFraction = Double(used) / 100
                 let colorRenderer = ImageRenderer(content:
-                    MenuBarQuotaLabel(claudeFraction: usedFraction, codexFraction: usedFraction,
+                    MenuBarQuotaLabel(fiveHourFraction: usedFraction, weekFraction: usedFraction,
                                       isDark: isDark, showsPercentages: false)
                         .background(isDark ? Color.black : Color.white))
                 colorRenderer.scale = 8

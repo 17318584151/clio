@@ -29,6 +29,8 @@ final class StatusItemController {
         // `@Published` fires before the property is set, so a handler that reads
         // the object back sees the previous value; the hop lets it settle first.
         for publisher in [store.$dashboard.map { _ in () }.eraseToAnyPublisher(),
+                          store.$accountQuotas.map { _ in () }.eraseToAnyPublisher(),
+                          store.$orca.map { _ in () }.eraseToAnyPublisher(),
                           prefs.$menuBarDisplay.map { _ in () }.eraseToAnyPublisher()] {
             publisher
                 .receive(on: RunLoop.main)
@@ -81,10 +83,11 @@ final class StatusItemController {
         renderedDark = isDark
 
         let showsQuota = prefs.menuBarDisplay.showsQuota
+        let account = store.menuBarAccount
         let label = Group {
             if showsQuota {
-                MenuBarQuotaLabel(claudeFraction: dashboard.snapshot(for: .claudeCode)?.menuBarQuota.fraction,
-                                  codexFraction: dashboard.snapshot(for: .codex)?.menuBarQuota.fraction,
+                MenuBarQuotaLabel(fiveHourFraction: account?.fraction(\.fiveHour),
+                                  weekFraction: account?.fraction(\.sevenDay),
                                   isDark: isDark, isSelected: isSelected,
                                   showsPercentages: prefs.menuBarDisplay.showsQuotaPercentages,
                                   tokenText: text)
@@ -92,7 +95,7 @@ final class StatusItemController {
                 MenuBarLabel(text: text, isDark: isDark, isSelected: isSelected, appIcon: appIcon)
             }
         }
-        button.toolTip = showsQuota ? quotaTooltip(dashboard) : nil
+        button.toolTip = showsQuota ? quotaTooltip(account) : nil
         let renderer = ImageRenderer(content: label)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let image = renderer.nsImage else { return }
@@ -101,27 +104,16 @@ final class StatusItemController {
         button.image = image
     }
 
-    private func quotaTooltip(_ dashboard: Dashboard) -> String {
-        [Tool.claudeCode, .codex].map { tool in
-            guard let snapshot = dashboard.snapshot(for: tool) else {
-                return "\(tool.displayName)（系统默认账号）：暂无额度数据"
+    private func quotaTooltip(_ account: AccountQuota?) -> String {
+        guard let account else { return "未找到 Orca 正在使用的账号" }
+        let lines = [("5 小时", \RateLimitSnapshot.fiveHour), ("本周", \.sevenDay)].map { title, window in
+            let used = MenuBarQuotaLabel.usedPercent(account.fraction(window)).map { "\($0)%" } ?? "—"
+            var line = "\(title)已用 \(used)"
+            if let reset = account.quota?[keyPath: window]?.resetsAt {
+                line += "\n重置：\(reset.formatted(date: .abbreviated, time: .shortened))"
             }
-            let windows: [QuotaWindow]
-            if let fiveHour = snapshot.fiveHour {
-                windows = fiveHour.fraction != nil ? [fiveHour, snapshot.week] : [snapshot.week, fiveHour]
-            } else {
-                windows = [snapshot.week]
-            }
-            let lines = windows.map { window in
-                let used = MenuBarQuotaLabel.usedPercent(window.fraction)
-                    .map { "\($0)%" } ?? "—"
-                var line = "\(window.title)已用 \(used)"
-                if let reset = window.resetsAt {
-                    line += "\n重置：\(reset.formatted(date: .abbreviated, time: .shortened))"
-                }
-                return line
-            }
-            return "\(tool.displayName)（系统默认账号） · " + lines.joined(separator: "\n")
-        }.joined(separator: "\n\n")
+            return line
+        }
+        return "\(account.account.name)（外圈 5 小时 · 内圈本周）\n" + lines.joined(separator: "\n")
     }
 }
