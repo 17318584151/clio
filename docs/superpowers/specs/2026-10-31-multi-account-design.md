@@ -2,7 +2,9 @@
 
 ## 最终范围
 
-识别 Claude Code 与 Codex 的多个已有登录账号，并列展示每个账号的已用额度、套餐、更新时间、重置时间及查询状态。读取 Orca 写入的 `claude-profiles/selected-host` 指针，标注 Orca 当前使用的 Claude 账号；空指针对应系统默认账号，指针不存在时不标注。Codex 的选中状态仅存于 Orca 内部数据库，不做标注。不增加账号切换或选中账号的功能，也不测试切号流程。
+识别 Claude Code、Codex 与 Antigravity 的多个已有登录账号，并列展示每个账号的已用额度、套餐、更新时间、重置时间及额度来源。
+
+Orca 的账号选择通过其官方 CLI 读写：`orca account list --json` 标注 Orca 当前用于启动 Claude Code 与 agy 的账号，并确定每个账号能否切换；`orca account select` 执行切换，效果与 Orca 状态栏的账号切换器相同，只影响之后启动的 agent。Claude 按配置目录中的登录身份对应账号，系统默认账号对应 `system`；agy 按邮箱对应。Codex 暂不支持切换。不读取或修改 Orca 的内部状态文件。
 
 ## 接入方案
 

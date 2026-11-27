@@ -33,12 +33,6 @@ enum AccountQuotaTests {
         precondition(fetched.quota?.sevenDay?.usedPercentage == 4 && fetched.status == "本地缓存",
                      "Claude accounts are never queried; fetching returns the local reading")
         let primary = accounts.first { $0.name == "default@example.com" }!
-        precondition(QuotaAccount.orcaClaudeAccountID(home: home) == nil, "without managed accounts Orca singles out none")
-        let pointer = home.appending(path: "Library/Application Support/orca/claude-profiles/selected-host")
-        try managed.path.write(to: pointer, atomically: true, encoding: .utf8)
-        precondition(QuotaAccount.orcaClaudeAccountID(home: home) == second.id, "the pointer names Orca's managed login")
-        try "".write(to: pointer, atomically: true, encoding: .utf8)
-        precondition(QuotaAccount.orcaClaudeAccountID(home: home) == primary.id, "an empty pointer routes to the system default")
         precondition(AccountQuota.cached(primary).quota?.sevenDay?.usedPercentage == 100)
         precondition(AccountQuota.cached(accounts.first { $0.tool == .codex }!).quota == nil)
         let zero = home.appending(path: "zero")
@@ -137,6 +131,35 @@ enum AccountQuotaTests {
                      "the Gemini buckets become the windows; an unused bucket has no reset time")
         precondition(RateLimitBridge.load(accountID: primary.id, support: home)?.fiveHour?.usedPercentage == 2,
                      "an agy payload never lands on a Claude account")
+        // Orca's account list maps onto Clio's rows by login identity and email.
+        try write(managed.appending(path: ".claude.json"), claude("second", 4))
+        func orcaList(claudeActive: String?, extra: [[String: Any]] = []) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["ok": true, "result": [
+                "claude": ["systemDefaultHome": home.appending(path: ".claude").path,
+                           "activeAccountId": claudeActive.map { $0 as Any } ?? NSNull(),
+                           "accounts": [["id": "managed-id", "home": managed.path],
+                                        ["id": "copy-id", "home": custom.path],
+                                        ["id": "gone-id", "home": home.appending(path: "gone").path]] + extra],
+                "antigravity": ["activeAccountId": "agy-id",
+                                "accounts": [["id": "agy-id", "email": "AGY@example.com"],
+                                             ["id": "other-id", "email": "other@example.com"]]],
+            ]])
+        }
+        let rows = accounts + [agy]
+        let identify = { (directory: URL) in QuotaAccount.read(directory: directory, home: home)?.id }
+        let orca = OrcaAccounts.parse(try orcaList(claudeActive: "managed-id"), accounts: rows, identify: identify)!
+        precondition(orca.targets == [primary.id: .init(agent: "claude", account: "system"),
+                                      second.id: .init(agent: "claude", account: "managed-id"),
+                                      agy.id: .init(agent: "antigravity", account: "agy-id")],
+                     "each shown login maps to the first Orca account for it; unknown logins are left out")
+        precondition(orca.active == [second.id, agy.id], "Orca's active Claude and agy accounts are marked")
+        let systemActive = OrcaAccounts.parse(try orcaList(claudeActive: nil), accounts: rows, identify: identify)
+        precondition(systemActive?.active == [primary.id, agy.id], "no active managed account means the system login")
+        let copyActive = OrcaAccounts.parse(try orcaList(claudeActive: "copy-id"), accounts: rows, identify: identify)
+        precondition(copyActive?.active == [second.id, agy.id], "a folder repeating a shown login marks that row")
+        precondition(OrcaAccounts.parse(Data(#"{"ok":false,"error":{"message":"down"}}"#.utf8), accounts: rows) == nil,
+                     "a failed listing yields no Orca state")
+
         var staleAgy = agyQuota
         staleAgy.quota?.updatedAt = .distantPast
         precondition(staleAgy.displayedFraction(staleAgy.quota!.fiveHour!, codexQueryInterval: 900) == 0.25,

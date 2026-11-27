@@ -157,7 +157,8 @@ struct PanelView: View {
                         SubscriptionCard(snapshots: dashboard.snapshots)
                     } else {
                         AccountQuotaCard(accounts: store.accountQuotas, queryingAccountIDs: store.queryingAccountIDs,
-                                         orcaAccountID: store.orcaClaudeAccountID)
+                                         orca: store.orca, switchingAccountID: store.switchingAccountID,
+                                         switchErrors: store.switchErrors, onSwitch: store.useInOrca)
                     }
                 }
                 if store.isLoading {

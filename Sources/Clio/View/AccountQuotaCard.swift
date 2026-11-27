@@ -3,7 +3,10 @@ import SwiftUI
 struct AccountQuotaCard: View {
     let accounts: [AccountQuota]
     let queryingAccountIDs: Set<String>
-    let orcaAccountID: String?
+    let orca: OrcaAccounts?
+    var switchingAccountID: String? = nil
+    var switchErrors: [String: String] = [:]
+    var onSwitch: (QuotaAccount) -> Void = { _ in }
 
     var body: some View {
         Card(spacing: 0) {
@@ -13,8 +16,12 @@ struct AccountQuotaCard: View {
                         if index > 0 {
                             Divider().padding(.vertical, 8)
                         }
+                        let isActive = orca?.active.contains(reading.id) == true
                         AccountQuotaRow(reading: reading, isQuerying: queryingAccountIDs.contains(reading.id),
-                                        isOrca: reading.id == orcaAccountID)
+                                        isOrca: isActive,
+                                        canSwitch: !isActive && orca?.targets[reading.id] != nil,
+                                        isSwitching: switchingAccountID == reading.id,
+                                        switchError: switchErrors[reading.id]) { onSwitch(reading.account) }
                     }
                 }
             }
@@ -30,6 +37,11 @@ private struct AccountQuotaRow: View {
     let reading: AccountQuota
     let isQuerying: Bool
     let isOrca: Bool
+    let canSwitch: Bool
+    let isSwitching: Bool
+    let switchError: String?
+    let onSwitch: () -> Void
+    @State private var isHovering = false
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -51,17 +63,42 @@ private struct AccountQuotaRow: View {
                 window("本周已用", reading.quota?.sevenDay)
             }
         }
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
         .help(details)
+        .contextMenu {
+            if canSwitch { Button("在 Orca 中使用此账号", action: onSwitch) }
+        }
     }
 
-    @ViewBuilder private var trailing: some View {
-        if isQuerying {
-            ProgressView().controlSize(.mini)
-        } else {
-            Text(reading.quota.map { "更新 \(Format.quotaTime($0.updatedAt))" } ?? reading.status)
+    /// The switch button takes the update time's place on hover, so nothing shifts.
+    private var trailing: some View {
+        let showsSwitch = canSwitch && isHovering && !isSwitching
+        return ZStack(alignment: .trailing) {
+            Text(switchError != nil ? "切换失败"
+                 : reading.quota.map { "更新 \(Format.quotaTime($0.updatedAt))" } ?? reading.status)
                 .font(.system(size: 9)).monospacedDigit()
-                .foregroundStyle(theme.textSecondary)
+                .foregroundStyle(switchError != nil ? theme.danger : theme.textSecondary)
                 .lineLimit(1).fixedSize()
+                .opacity(showsSwitch || isQuerying || isSwitching ? 0 : 1)
+            if isQuerying || isSwitching {
+                ProgressView().controlSize(.mini)
+            } else if canSwitch {
+                Button(action: onSwitch) {
+                    Text("切换")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(theme.accent)
+                        .padding(.horizontal, 7)
+                        .frame(height: 18)
+                        .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(showsSwitch ? 1 : 0)
+                .allowsHitTesting(showsSwitch)
+                .help("让 Orca 之后启动的 \(reading.account.tool.displayName) 使用此账号，已运行的会话不受影响")
+                .accessibilityLabel("在 Orca 中使用 \(reading.account.name)")
+            }
         }
     }
 
@@ -77,7 +114,8 @@ private struct AccountQuotaRow: View {
 
     private var details: String {
         var lines = [reading.account.tool.displayName, reading.account.name, reading.status]
-        if isOrca { lines.append("Orca 当前使用此账号") }
+        if isOrca { lines.append("Orca 当前使用此账号启动 \(reading.account.tool.displayName)") }
+        if let switchError { lines.append("切换失败：\(switchError)") }
         if let quota = reading.quota { lines.append("数据获取于 \(Format.stamp(quota.updatedAt))") }
         else if reading.account.tool != .codex {
             lines.append("在设置中接入状态栏后，运行 \(reading.account.tool == .antigravity ? "agy" : "Claude Code") 即可更新")

@@ -11,7 +11,7 @@ struct QuotaAccount: Identifiable, Equatable {
 
     static func discover(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                          extraDirectories: [String] = []) -> [QuotaAccount] {
-        let orca = orcaRoot(home)
+        let orca = home.appending(path: "Library/Application Support/orca")
         var candidates = [home.appending(path: ".claude"), home.appending(path: ".codex")]
         for folder in ["claude-profiles", "codex-profiles"] {
             let root = orca.appending(path: folder)
@@ -29,15 +29,6 @@ struct QuotaAccount: Identifiable, Equatable {
         return Tool.allCases.flatMap { tool in accounts.filter { $0.tool == tool } }
     }
 
-    /// Orca mirrors its selected Claude login to `selected-host`; an empty
-    /// pointer routes to the system default. No pointer means Orca has no
-    /// managed accounts, so no account is singled out.
-    static func orcaClaudeAccountID(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String? {
-        let pointer = orcaRoot(home).appending(path: "claude-profiles/selected-host")
-        guard let path = try? String(contentsOf: pointer, encoding: .utf8) else { return nil }
-        return read(directory: path.isEmpty ? home.appending(path: ".claude") : URL(fileURLWithPath: path), home: home)?.id
-    }
-
     /// agy keeps no readable credentials, but each run logs the signed-in
     /// account early on. The newest log that names one is the current login.
     static func antigravity(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> QuotaAccount? {
@@ -52,10 +43,6 @@ struct QuotaAccount: Identifiable, Equatable {
                                 directory: directory, profile: directory.appending(path: "settings.json"), isDefault: true)
         }
         return nil
-    }
-
-    private static func orcaRoot(_ home: URL) -> URL {
-        home.appending(path: "Library/Application Support/orca")
     }
 
     static func read(directory: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> QuotaAccount? {

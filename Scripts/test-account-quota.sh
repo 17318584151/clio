@@ -22,5 +22,6 @@ swiftc -swift-version 5 -module-cache-path "$scratch/module-cache" \
     "$root/Sources/Clio/Data/CodexUsageProbe.swift" \
     "$root/Sources/Clio/Data/ClaudeConfigReader.swift" \
     "$root/Sources/Clio/Data/QuotaAccount.swift" \
+    "$root/Sources/Clio/Data/OrcaAccounts.swift" \
     "$root/Tests/AccountQuotaTests.swift"
 "$scratch/account-tests" "$@"
