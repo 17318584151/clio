@@ -147,6 +147,8 @@ final class UsageStore: ObservableObject {
     @Published private(set) var accountQuotas: [AccountQuota] = []
     @Published var accountDirectoryError: String?
     @Published private(set) var queryingAccountIDs: Set<String> = []
+    /// The Claude login Orca currently launches sessions with.
+    @Published private(set) var orcaClaudeAccountID: String?
     private var lastAccountQueries: [String: Date] = [:]
     private var lastDefaultQueries: [Tool: Date] = [:]
     private let accountQuery: @Sendable (QuotaAccount, TimeInterval, Bool) -> AccountQuota
@@ -181,6 +183,7 @@ final class UsageStore: ObservableObject {
     func refreshAccounts(force: Bool = false, manual: Bool = false) {
         guard !isPreview else { return }
         let accounts = QuotaAccount.discover(extraDirectories: extraAccountDirectories)
+        orcaClaudeAccountID = QuotaAccount.orcaClaudeAccountID()
         let maxAge = prefs.quotaInterval
         let now = Date()
         let previousAccounts = Dictionary(uniqueKeysWithValues: accountQuotas.map { ($0.id, $0) })
@@ -279,6 +282,7 @@ final class UsageStore: ObservableObject {
         self.claudeQuery = claudeQuery
         self.codexQuery = codexQuery
         accountQuotas = QuotaAccount.discover(extraDirectories: extraAccountDirectories).map { AccountQuota.cached($0) }
+        orcaClaudeAccountID = QuotaAccount.orcaClaudeAccountID()
         prefs.$refreshInterval
             .removeDuplicates()
             .sink { [weak self] interval in self?.startTimer(interval) }
@@ -475,10 +479,12 @@ final class UsageStore: ObservableObject {
     }
 
     /// A store holding a fixed dashboard, for rendering a design comparison.
-    static func preview(_ dashboard: Dashboard, accounts: [AccountQuota] = []) -> UsageStore {
+    static func preview(_ dashboard: Dashboard, accounts: [AccountQuota] = [],
+                        orcaAccountID: String? = nil) -> UsageStore {
         let store = UsageStore()
         store.isPreview = true
         store.accountQuotas = accounts
+        store.orcaClaudeAccountID = orcaAccountID
         store.timer?.invalidate()
         store.timer = nil
         store.dashboard = dashboard

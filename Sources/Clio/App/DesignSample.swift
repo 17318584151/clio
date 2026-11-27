@@ -4,6 +4,9 @@ import Foundation
 /// the artboard one-to-one instead of against live data that never matches.
 @MainActor
 enum DesignSample {
+    /// The work login stands in for the account Orca launches with.
+    static let orcaAccountID = "preview-1"
+
     static func accounts(now: Date = Date()) -> [AccountQuota] {
         let reset = now.addingTimeInterval(4 * 86400)
         return [(Tool.claudeCode, "personal@example.com", 38.0, 62.0),

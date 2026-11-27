@@ -46,6 +46,12 @@ enum AccountQuotaTests {
         precondition(UsageProbe.calls.isEmpty, "fresh local quota must not launch Claude CLI")
         precondition(fresh.quota?.sevenDay?.usedPercentage == 4, "fresh local quota remains visible")
         let primary = accounts.first { $0.name == "default@example.com" }!
+        precondition(QuotaAccount.orcaClaudeAccountID(home: home) == nil, "without managed accounts Orca singles out none")
+        let pointer = home.appending(path: "Library/Application Support/orca/claude-profiles/selected-host")
+        try managed.path.write(to: pointer, atomically: true, encoding: .utf8)
+        precondition(QuotaAccount.orcaClaudeAccountID(home: home) == second.id, "the pointer names Orca's managed login")
+        try "".write(to: pointer, atomically: true, encoding: .utf8)
+        precondition(QuotaAccount.orcaClaudeAccountID(home: home) == primary.id, "an empty pointer routes to the system default")
         precondition(AccountQuota.cached(primary).quota?.sevenDay?.usedPercentage == 100)
         precondition(AccountQuota.cached(accounts.first { $0.tool == .codex }!).quota == nil)
         let zero = home.appending(path: "zero")

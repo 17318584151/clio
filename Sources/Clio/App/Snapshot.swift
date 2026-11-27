@@ -20,7 +20,10 @@ enum Snapshot {
         }
 
         let sampleOnly = CommandLine.arguments.contains("--sample-only")
-        let store = sampleOnly ? UsageStore.preview(DesignSample.dashboard(), accounts: DesignSample.accounts()) : UsageStore()
+        let store = sampleOnly
+            ? UsageStore.preview(DesignSample.dashboard(), accounts: DesignSample.accounts(),
+                                 orcaAccountID: DesignSample.orcaAccountID)
+            : UsageStore()
         let prefs = Preferences.shared
 
         Task {
@@ -86,7 +89,8 @@ enum Snapshot {
             for scheme in [ColorScheme.light, .dark] {
                 let name = scheme == .light ? "light" : "dark"
                 writeNative(PanelView(onOpenSettings: {})
-                        .environmentObject(UsageStore.preview(DesignSample.dashboard(), accounts: DesignSample.accounts()))
+                        .environmentObject(UsageStore.preview(DesignSample.dashboard(), accounts: DesignSample.accounts(),
+                                                              orcaAccountID: DesignSample.orcaAccountID))
                         .environmentObject(prefs)
                         .environment(\.colorScheme, scheme)
                         .background(backdrop(scheme)),

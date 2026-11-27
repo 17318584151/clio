@@ -3,6 +3,7 @@ import SwiftUI
 struct AccountQuotaCard: View {
     let accounts: [AccountQuota]
     let queryingAccountIDs: Set<String>
+    let orcaAccountID: String?
     let onRefresh: (QuotaAccount) -> Void
     @Environment(\.theme) private var theme
 
@@ -22,6 +23,7 @@ struct AccountQuotaCard: View {
                                     .font(.system(size: 11, weight: .medium))
                                     .lineLimit(1).truncationMode(.middle)
                                     .help(details(reading))
+                                if reading.id == orcaAccountID { orcaBadge }
                                 Spacer(minLength: 4)
                                 if let quota = reading.quota {
                                     Text("更新 \(Format.quotaTime(quota.updatedAt))")
@@ -52,6 +54,18 @@ struct AccountQuotaCard: View {
         .font(.system(size: 11))
     }
 
+    private var orcaBadge: some View {
+        Text("Orca")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(theme.accent)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(theme.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .fixedSize()
+            .help("Orca 当前使用此账号启动 Claude Code")
+            .accessibilityLabel("Orca 当前使用此账号")
+    }
+
     private func refreshButton(_ account: QuotaAccount) -> some View {
         let isQuerying = queryingAccountIDs.contains(account.id)
         return Button { onRefresh(account) } label: {
@@ -76,6 +90,7 @@ struct AccountQuotaCard: View {
 
     private func details(_ reading: AccountQuota) -> String {
         var lines = [reading.account.tool.displayName, reading.account.name, reading.status]
+        if reading.id == orcaAccountID { lines.append("Orca 当前使用此账号") }
         if let quota = reading.quota { lines.append("数据获取于 \(Format.stamp(quota.updatedAt))") }
         if let count = reading.remainingResets { lines.append("剩余重置次数 \(count) 次") }
         lines.append(reading.account.directory.path)
