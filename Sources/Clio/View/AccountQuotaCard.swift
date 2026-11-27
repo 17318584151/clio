@@ -5,7 +5,6 @@ struct AccountQuotaCard: View {
     let queryingAccountIDs: Set<String>
     let orcaAccountID: String?
     let onRefresh: (QuotaAccount) -> Void
-    @Environment(\.theme) private var theme
 
     var body: some View {
         Card(spacing: 0) {
@@ -15,91 +14,111 @@ struct AccountQuotaCard: View {
                         if index > 0 {
                             Divider().padding(.vertical, 8)
                         }
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 6) {
-                                BrandIcon(tool: reading.account.tool, size: 14,
-                                          color: reading.account.tool.brandColor ?? theme.textPrimary)
-                                Text(reading.account.name)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .lineLimit(1).truncationMode(.middle)
-                                    .help(details(reading))
-                                if reading.id == orcaAccountID { orcaBadge }
-                                Spacer(minLength: 4)
-                                if let quota = reading.quota {
-                                    Text("更新 \(Format.quotaTime(quota.updatedAt))")
-                                        .font(.system(size: 9)).monospacedDigit()
-                                        .foregroundStyle(theme.textSecondary)
-                                        .lineLimit(1).fixedSize()
-                                }
-                                if let plan = reading.plan { PlanBadge(text: plan) }
-                                // agy only reports quota through its status line; there is nothing to query.
-                                if reading.account.tool != .antigravity { refreshButton(reading.account) }
-                            }
-                            if reading.quota?.fiveHour != nil || reading.quota?.sevenDay != nil {
-                                HStack(spacing: 12) {
-                                    window("5 小时已用", reading.quota?.fiveHour, reading: reading)
-                                    window("本周已用", reading.quota?.sevenDay, reading: reading)
-                                }
-                                .help(details(reading))
-                            } else {
-                                Text(queryingAccountIDs.contains(reading.id) ? "额度查询中…"
-                                     : reading.account.tool == .antigravity ? "额度未知，接入状态栏后运行 agy 更新" : "额度未知")
-                                    .foregroundStyle(theme.textSecondary)
-                                    .help(details(reading))
-                            }
-                        }
+                        AccountQuotaRow(reading: reading, isQuerying: queryingAccountIDs.contains(reading.id),
+                                        isOrca: reading.id == orcaAccountID) { onRefresh(reading.account) }
                     }
                 }
             }
-            .frame(height: min(CGFloat(accounts.count) * 62 + CGFloat(max(0, accounts.count - 1)) * 17, 360))
+            // Five accounts fit without scrolling.
+            .frame(height: min(CGFloat(accounts.count) * 62 + CGFloat(max(0, accounts.count - 1)) * 17, 380))
         }
         .font(.system(size: 11))
     }
+}
 
-    private var orcaBadge: some View {
-        Text("Orca")
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(theme.accent)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(theme.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-            .fixedSize()
-            .help("Orca 当前使用此账号启动 Claude Code")
-            .accessibilityLabel("Orca 当前使用此账号")
+/// Every account keeps the same shape, known or not, so the rows line up.
+private struct AccountQuotaRow: View {
+    let reading: AccountQuota
+    let isQuerying: Bool
+    let isOrca: Bool
+    let onRefresh: () -> Void
+    @State private var isHovering = false
+    @Environment(\.theme) private var theme
+
+    /// agy only reports quota through its status line; there is nothing to query.
+    private var canRefresh: Bool { reading.account.tool != .antigravity }
+
+    /// The address is in the tooltip; the shared domain only crowds the row.
+    private var shortName: String {
+        String(reading.account.name.split(separator: "@").first ?? Substring(reading.account.name))
     }
 
-    private func refreshButton(_ account: QuotaAccount) -> some View {
-        let isQuerying = queryingAccountIDs.contains(account.id)
-        return Button { onRefresh(account) } label: {
-            Group {
-                if isQuerying {
-                    ProgressView().controlSize(.mini)
-                } else {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                BrandIcon(tool: reading.account.tool, size: 14,
+                          color: reading.account.tool.brandColor ?? theme.textPrimary)
+                Text(shortName)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1).truncationMode(.tail)
+                if isOrca { tag("Orca", color: theme.accent) }
+                if let plan = reading.plan { tag(plan, color: theme.badgeText) }
+                Spacer(minLength: 6)
+                trailing
+            }
+            .frame(height: 20)
+            HStack(spacing: 12) {
+                window("5 小时已用", reading.quota?.fiveHour)
+                window("本周已用", reading.quota?.sevenDay)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .help(details)
+    }
+
+    /// The update time gives way to the refresh button on hover, in the same space.
+    private var trailing: some View {
+        ZStack(alignment: .trailing) {
+            Text(reading.quota.map { "更新 \(Format.quotaTime($0.updatedAt))" } ?? reading.status)
+                .font(.system(size: 9)).monospacedDigit()
+                .foregroundStyle(theme.textSecondary)
+                .lineLimit(1).fixedSize()
+                .opacity(isQuerying || (isHovering && canRefresh) ? 0 : 1)
+            if isQuerying {
+                ProgressView().controlSize(.mini).frame(width: 20, height: 20)
+            } else if canRefresh {
+                Button(action: onRefresh) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(theme.accent)
+                        .frame(width: 20, height: 20)
+                        .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .opacity(isHovering ? 1 : 0)
+                .allowsHitTesting(isHovering)
+                .help("手动刷新 \(reading.account.name) 的额度（会联网查询）")
+                .accessibilityLabel("\(reading.account.name)：手动刷新额度")
             }
-            .frame(width: 20, height: 20)
-            .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: 5))
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .disabled(isQuerying)
-        .help("手动刷新 \(account.name) 的额度（会联网查询）")
-        .accessibilityLabel("\(account.name)：\(isQuerying ? "额度查询中" : "手动刷新额度")")
     }
 
-    private func details(_ reading: AccountQuota) -> String {
+    private func tag(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .fixedSize()
+    }
+
+    private var details: String {
         var lines = [reading.account.tool.displayName, reading.account.name, reading.status]
-        if reading.id == orcaAccountID { lines.append("Orca 当前使用此账号") }
+        if isOrca { lines.append("Orca 当前使用此账号") }
         if let quota = reading.quota { lines.append("数据获取于 \(Format.stamp(quota.updatedAt))") }
+        else if !canRefresh { lines.append("在设置中接入状态栏后，运行 agy 即可更新") }
+        for (title, window) in [("5 小时", reading.quota?.fiveHour), ("本周", reading.quota?.sevenDay)] {
+            if let reset = window?.resetsAt { lines.append("\(title)重置于 \(Format.stamp(reset))") }
+        }
         if let count = reading.remainingResets { lines.append("剩余重置次数 \(count) 次") }
         lines.append(reading.account.directory.path)
         return lines.joined(separator: "\n")
     }
 
-    private func window(_ title: String, _ value: RateLimitWindow?, reading: AccountQuota) -> some View {
+    private func window(_ title: String, _ value: RateLimitWindow?) -> some View {
         let used = value.flatMap { reading.displayedFraction($0,
             automaticClaudeQueries: Preferences.shared.automaticClaudeQuotaQueries,
             queryInterval: Preferences.shared.queryInterval(for: reading.account.tool)) }
@@ -108,6 +127,7 @@ struct AccountQuotaCard: View {
                 Text(title).foregroundStyle(theme.textSecondary)
                 Spacer()
                 Text(used.map(Format.percent) ?? "未知").monospacedDigit()
+                    .foregroundStyle(used == nil ? theme.textSecondary : theme.textPrimary)
             }
             GeometryReader { geometry in
                 Capsule().fill(theme.track)
@@ -125,7 +145,5 @@ struct AccountQuotaCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
-        .help([title,
-               value?.resetsAt.map { "重置于 \(Format.stamp($0))" } ?? "重置时间未知"].joined(separator: "\n"))
     }
 }
