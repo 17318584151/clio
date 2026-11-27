@@ -11,15 +11,16 @@ enum DesignSample {
         let reset = now.addingTimeInterval(4 * 86400)
         return [(Tool.claudeCode, "personal@example.com", 38.0, 62.0),
                 (.claudeCode, "work@example.com", 15.0, 40.0),
-                (.codex, "codex@example.com", 54.0, 0.0)].enumerated().map { index, sample in
+                (.codex, "codex@example.com", 54.0, 0.0),
+                (.antigravity, "agy@example.com", 6.0, 25.0)].enumerated().map { index, sample in
             let (tool, name, week, fiveHour) = sample
             let directory = URL(fileURLWithPath: "/preview/\(index)")
             return AccountQuota(account: .init(id: "preview-\(index)", tool: tool, name: name,
                 directory: directory, profile: directory.appending(path: ".claude.json"), isDefault: index == 0),
                 quota: .init(updatedAt: now.addingTimeInterval(Double(-120 - index * 180)),
-                    fiveHour: tool == .claudeCode ? .init(usedPercentage: fiveHour, resetsAt: now.addingTimeInterval(7200)) : nil,
+                    fiveHour: tool != .codex ? .init(usedPercentage: fiveHour, resetsAt: now.addingTimeInterval(7200)) : nil,
                     sevenDay: .init(usedPercentage: week, resetsAt: reset), modelScoped: []),
-                plan: tool == .claudeCode ? "Max 5×" : "Pro 20×", status: "本地缓存")
+                plan: [.claudeCode: "Max 5×", .codex: "Pro 20×"][tool], status: "本地缓存")
         }
     }
 

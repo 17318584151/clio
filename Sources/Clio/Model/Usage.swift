@@ -4,6 +4,7 @@ import Foundation
 enum Tool: String, CaseIterable, Codable, Identifiable {
     case claudeCode
     case codex
+    case antigravity
 
     var id: String { rawValue }
 
@@ -11,6 +12,7 @@ enum Tool: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .claudeCode: return "Claude Code"
         case .codex: return "Codex"
+        case .antigravity: return "Antigravity"
         }
     }
 
@@ -20,6 +22,7 @@ enum Tool: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .claudeCode: return home.appending(path: ".claude/projects")
         case .codex: return home.appending(path: ".codex/sessions")
+        case .antigravity: return home.appending(path: ".gemini/antigravity-cli/conversations")
         }
     }
 
@@ -27,19 +30,21 @@ enum Tool: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .claudeCode: return "~/.claude/projects"
         case .codex: return "~/.codex/sessions"
+        case .antigravity: return "~/.gemini/antigravity{-cli,}/conversations"
         }
     }
 }
 
 /// Model family is independent of the log reader that supplied the event.
 enum ModelCategory: String, CaseIterable, Codable, Identifiable {
-    case claudeCode, codex, other
+    case claudeCode, codex, gemini, other
 
     var id: String { rawValue }
     var displayName: String {
         switch self {
         case .claudeCode: return "Claude"
         case .codex: return "Codex"
+        case .gemini: return "Gemini"
         case .other: return "其他"
         }
     }
@@ -50,11 +55,16 @@ enum ModelCategory: String, CaseIterable, Codable, Identifiable {
         let words = normalized.split { !$0.isLetter && !$0.isNumber }
         if words.contains("claude") { self = .claudeCode }
         else if words.contains(where: { $0 == "gpt" || ($0.hasPrefix("gpt") && $0.dropFirst(3).first?.isNumber == true) }) { self = .codex }
+        else if words.contains("gemini") { self = .gemini }
         else { self = .other }
     }
 
     init(legacyTool: Tool) {
-        self = legacyTool == .claudeCode ? .claudeCode : .codex
+        switch legacyTool {
+        case .claudeCode: self = .claudeCode
+        case .codex: self = .codex
+        case .antigravity: self = .gemini
+        }
     }
 }
 
@@ -67,13 +77,15 @@ enum UsageScope: String, CaseIterable {
     case combined
     case claudeCode
     case codex
+    case gemini
     case other
 
     var next: UsageScope {
         switch self {
         case .combined: return .claudeCode
         case .claudeCode: return .codex
-        case .codex: return .other
+        case .codex: return .gemini
+        case .gemini: return .other
         case .other: return .combined
         }
     }
@@ -83,6 +95,7 @@ enum UsageScope: String, CaseIterable {
         case .combined: return nil
         case .claudeCode: return .claudeCode
         case .codex: return .codex
+        case .gemini: return .antigravity
         case .other: return nil
         }
     }
@@ -96,6 +109,7 @@ enum UsageScope: String, CaseIterable {
         case .combined: return "合并"
         case .claudeCode: return "Claude"
         case .codex: return "Codex"
+        case .gemini: return "Gemini"
         case .other: return "其他"
         }
     }

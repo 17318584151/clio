@@ -139,7 +139,7 @@ struct SettingsContent: View {
             section("账号额度") {
                 ForEach(store.accountQuotas) { reading in
                     row(reading.account.tool.displayName, detail: reading.account.name) {
-                        if reading.account.tool == .claudeCode {
+                        if reading.account.tool != .codex {
                             statusLineButton(for: reading.account)
                         }
                         if store.isCustomAccount(reading.account) {
@@ -147,7 +147,7 @@ struct SettingsContent: View {
                         }
                     }
                 }
-                row("添加账号目录", detail: "自动识别系统及 Orca 账号；其他客户端可添加配置目录。历史用量仍按本机汇总。") {
+                row("添加账号目录", detail: "自动识别系统、Orca 及 agy 账号；其他客户端可添加配置目录。历史用量仍按本机汇总。") {
                     Button("添加…") {
                         let panel = NSOpenPanel()
                         panel.canChooseDirectories = true
@@ -323,7 +323,8 @@ struct SettingsContent: View {
         }
         .controlSize(.small)
         .disabled(state == .unavailable)
-        .help(state == .unavailable ? "无法读取 Claude Code 配置" : "保留原有状态栏，在 Claude Code 更新状态栏时同步额度")
+        .help(state == .unavailable ? "无法读取 \(account.tool.displayName) 配置"
+              : "保留原有状态栏，在 \(account.tool.displayName) 更新状态栏时同步额度")
     }
 
     private var codexHelperOption: some View {

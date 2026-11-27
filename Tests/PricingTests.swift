@@ -39,6 +39,7 @@ private final class PricingProtocol: URLProtocol {
                 "deepseek-v4-pro": model(1.32, 3.96, 0.044),
                 "gpt-6-sol": model(999, 999, 999),
             ]],
+            "google": ["models": ["gemini-4-neon": model(3, 15, 0.15)]],
             "zai": ["models": ["glm-5.3": ["cost": ["input": 1.4, "output": 4.4, "cache_read": 0.26, "cache_write": 0]]]],
             "reseller": ["models": [
                 "glm-5.3": model(99, 99, 99),
@@ -64,6 +65,9 @@ private final class PricingProtocol: URLProtocol {
         expect(table.price(for: "other/deepseek-v4-pro")?.input == 1.32, "DeepSeek variants keep their own rates")
         expect(table.prices["deepseek/gpt-6-sol"] == nil && table.prices["reseller/gpt-6-sol"] == nil,
                "a supplier cannot publish another supplier's model rate")
+        for name in ["gemini-4-neon", "google/gemini-4-neon"] {
+            expect(table.price(for: name)?.input == 3, "Gemini models use the original Google rate: \(name)")
+        }
         for name in ["glm-5.3", "GLM-5.3", "zai/glm-5.3", "z-ai/GLM-5.3", "workbuddy-ai/glm-5.3"] {
             expect(table.price(for: name)?.input == 1.4, "GLM models use the original Z.AI rate: \(name)")
             expect(abs(table.cost(.init(input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000), model: name)! - 6.06) < 1e-12,
@@ -124,7 +128,7 @@ private final class PricingProtocol: URLProtocol {
         let upgradedTable = await upgraded.table()
         expect(upgradedTable.price(for: "gateway/glm-5.3")?.input == 1.4, "GLM rates are fetched even when a version 2 cache is fresh")
         let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: freshPath)) as! [String: Any]
-        expect(stored["catalogVersion"] as? Int == 3, "successful refresh records the provider catalog version")
+        expect(stored["catalogVersion"] as? Int == 4, "successful refresh records the provider catalog version")
         let count = PricingProtocol.requests.count
         await upgraded.refreshIfNeeded()
         expect(PricingProtocol.requests.count == count, "fresh current catalogs skip the network")
@@ -133,7 +137,7 @@ private final class PricingProtocol: URLProtocol {
 
         let stalePath = root.appending(path: "stale.json")
         let oldDate = Date().addingTimeInterval(-90_000)
-        try writeCache(stalePath, date: oldDate, version: 3)
+        try writeCache(stalePath, date: oldDate, version: 4)
         PricingProtocol.handler = { request in
             expect(request.value(forHTTPHeaderField: "If-None-Match") == "old-etag", "current stale caches use conditional requests")
             return (304, Data())
@@ -143,7 +147,7 @@ private final class PricingProtocol: URLProtocol {
         expect(await revalidated.lastFetch! > oldDate, "304 advances a current catalog's validation date")
         expect(await revalidated.table().price(for: "gateway/gpt-6-sol")?.input == 4, "304 preserves cached rates")
 
-        for version in [nil, Optional(2), Optional(3)] {
+        for version in [nil, Optional(2), Optional(3), Optional(4)] {
             let offlinePath = root.appending(path: "offline-\(version ?? 0).json")
             try writeCache(offlinePath, date: oldDate, version: version)
             PricingProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }

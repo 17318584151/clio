@@ -32,7 +32,8 @@ struct AccountQuotaCard: View {
                                         .lineLimit(1).fixedSize()
                                 }
                                 if let plan = reading.plan { PlanBadge(text: plan) }
-                                refreshButton(reading.account)
+                                // agy only reports quota through its status line; there is nothing to query.
+                                if reading.account.tool != .antigravity { refreshButton(reading.account) }
                             }
                             if reading.quota?.fiveHour != nil || reading.quota?.sevenDay != nil {
                                 HStack(spacing: 12) {
@@ -41,7 +42,8 @@ struct AccountQuotaCard: View {
                                 }
                                 .help(details(reading))
                             } else {
-                                Text(queryingAccountIDs.contains(reading.id) ? "额度查询中…" : "额度未知")
+                                Text(queryingAccountIDs.contains(reading.id) ? "额度查询中…"
+                                     : reading.account.tool == .antigravity ? "额度未知，接入状态栏后运行 agy 更新" : "额度未知")
                                     .foregroundStyle(theme.textSecondary)
                                     .help(details(reading))
                             }

@@ -59,6 +59,10 @@ enum BrandMark {
         "3.733 5.508 3.906 5.507 4.094|Z|M 6.245 6.998|L 8.003 5.998|L 9.765 6.998|L 9.765 8.998|L 8.01" +
         "9.998|L 6.248 8.998|Z"
 
+    /// A four-point spark standing in for Antigravity, which has no mark on the canvas.
+    static let antigravity =
+        "M 8 0|C 8.4 4.4 11.6 7.6 16 8|C 11.6 8.4 8.4 11.6 8 16|C 7.6 11.6 4.4 8.4 0 8|C 4.4 7.6 7.6 4.4 8 0|Z"
+
     /// Build a Path scaled into `rect` from the encoded segment list.
     static func path(_ encoded: String, in rect: CGRect) -> Path {
         var path = Path()
@@ -92,7 +96,13 @@ enum BrandMark {
 extension Tool {
     /// The Claude mark carries its brand orange wherever the tool is the active
     /// one; the Codex mark has no coloured variant on the canvas.
-    var brandColor: Color? { self == .claudeCode ? Color(hex: 0xD97757) : nil }
+    var brandColor: Color? {
+        switch self {
+        case .claudeCode: Color(hex: 0xD97757)
+        case .codex: nil
+        case .antigravity: Color(hex: 0x4285F4)
+        }
+    }
 }
 
 struct BrandIcon: View {
@@ -102,7 +112,11 @@ struct BrandIcon: View {
 
     var body: some View {
         Canvas { context, canvasSize in
-            let encoded = tool == .claudeCode ? BrandMark.claudeCode : BrandMark.codex
+            let encoded = switch tool {
+            case .claudeCode: BrandMark.claudeCode
+            case .codex: BrandMark.codex
+            case .antigravity: BrandMark.antigravity
+            }
             let rect = CGRect(origin: .zero, size: canvasSize)
             context.fill(BrandMark.path(encoded, in: rect), with: .color(color))
         }

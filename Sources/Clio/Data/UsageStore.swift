@@ -2,11 +2,12 @@ import Foundation
 import Combine
 import AppKit
 
-/// Owns both log readers off the main actor. Parsing runs here so the panel
+/// Owns the log readers off the main actor. Parsing runs here so the panel
 /// stays responsive while ~1 GiB of session logs is walked.
 actor LogReaders {
     private let claude: ClaudeCodeReader
     private let codex: CodexReader
+    private let antigravity: AntigravityReader
 
     private var codexQuota: RateLimitSnapshot?
     private var parsed: Result?
@@ -18,10 +19,12 @@ actor LogReaders {
     private struct UsageCacheKey: Equatable {
         var claudeRevision: Int
         var codexRevision: Int
+        var antigravityRevision: Int
         var prices: PriceTable
         var history: [Date: Int]
         var claudeLedger: UsageLedger?
         var codexLedger: UsageLedger?
+        var antigravityLedger: UsageLedger?
         var categoryLedger: CategoryLedger?
         var retentionDays: Int?
         var day: Date
@@ -33,13 +36,17 @@ actor LogReaders {
         var claudeRejections: [QuotaRejection] = []
         var codexEvents: [UsageEvent] = []
         var codexQuota: RateLimitSnapshot?
+        var antigravityEvents: [UsageEvent] = []
         var claudeAvailable = false
         var codexAvailable = false
+        var antigravityAvailable = false
     }
 
-    init(claude: ClaudeCodeReader = ClaudeCodeReader(), codex: CodexReader = CodexReader()) {
+    init(claude: ClaudeCodeReader = ClaudeCodeReader(), codex: CodexReader = CodexReader(),
+         antigravity: AntigravityReader = AntigravityReader()) {
         self.claude = claude
         self.codex = codex
+        self.antigravity = antigravity
     }
 
     func refresh() -> Result {
@@ -52,6 +59,8 @@ actor LogReaders {
         let codexReading = codex.refresh()
         result.codexEvents = codexReading.events
         result.codexQuota = codexReading.quota
+        result.antigravityAvailable = antigravity.isAvailable
+        result.antigravityEvents = antigravity.refresh()
         return result
     }
 
@@ -63,11 +72,14 @@ actor LogReaders {
         let history = StatsCacheReader.dailyTokens()
         var storedClaude = UsageLedger.load(for: .claudeCode)
         var storedCodex = UsageLedger.load(for: .codex)
+        var storedAntigravity = UsageLedger.load(for: .antigravity)
         let retentionDays = UsageLedger.retentionDays()
         let categoryLedger = CategoryLedger.load()
         var key = UsageCacheKey(claudeRevision: claude.revision, codexRevision: codex.revision,
+                                antigravityRevision: antigravity.revision,
                                 prices: prices, history: history, claudeLedger: storedClaude,
-                                codexLedger: storedCodex, categoryLedger: categoryLedger, retentionDays: retentionDays,
+                                codexLedger: storedCodex, antigravityLedger: storedAntigravity,
+                                categoryLedger: categoryLedger, retentionDays: retentionDays,
                                 day: calendar.startOfDay(for: now), calendar: calendar)
         let reuseUsage = key == cacheKey
 
@@ -105,15 +117,31 @@ actor LogReaders {
                                                        now: now, calendar: calendar))
             if !reuseUsage { events += parsed.codexEvents }
         }
+        if (parsed.antigravityAvailable && !parsed.antigravityEvents.isEmpty) || storedAntigravity?.days.isEmpty == false {
+            let ledger = (reuseUsage ? storedAntigravity : nil) ?? UsageLedger.updated(storedAntigravity, events: parsed.antigravityEvents,
+                                             history: [:], now: now, retentionDays: Int(LogScanner.retention / 86400), calendar: calendar)
+            if ledger != storedAntigravity { ledger.save(for: .antigravity) }
+            storedAntigravity = ledger
+            snapshots.append(DashboardBuilder.snapshot(tool: .antigravity,
+                                                       events: parsed.antigravityEvents,
+                                                       rejections: [],
+                                                       prices: prices,
+                                                       quota: quota[.antigravity] ?? .init(), ledger: ledger,
+                                                       cachedUsage: reuseUsage ? cachedSnapshots.first { $0.tool == .antigravity }?.usage : nil,
+                                                       now: now, calendar: calendar))
+            if !reuseUsage { events += parsed.antigravityEvents }
+        }
         if !reuseUsage {
             cachedCategories = DashboardBuilder.categorized([
-                (.claudeCode, parsed.claudeEvents, storedClaude), (.codex, parsed.codexEvents, storedCodex)
+                (.claudeCode, parsed.claudeEvents, storedClaude), (.codex, parsed.codexEvents, storedCodex),
+                (.antigravity, parsed.antigravityEvents, storedAntigravity)
             ], prices: prices, now: now, calendar: calendar, verified: categoryLedger)
             cachedCombined = DashboardBuilder.combined(cachedCategories.map(\.usage), events: events, now: now, calendar: calendar)
         }
         cachedSnapshots = snapshots
         key.claudeLedger = storedClaude
         key.codexLedger = storedCodex
+        key.antigravityLedger = storedAntigravity
         cacheKey = key
         return Dashboard(snapshots: snapshots, combined: cachedCombined, updatedAt: now, categories: cachedCategories)
     }
@@ -189,6 +217,7 @@ final class UsageStore: ObservableObject {
         let previousAccounts = Dictionary(uniqueKeysWithValues: accountQuotas.map { ($0.id, $0) })
         accountQuotas = accounts.map { account in
             let previous = previousAccounts[account.id].flatMap { $0.account == account ? $0 : nil }
+            if account.tool == .antigravity { return AccountQuota.cached(account) }
             guard account.tool == .claudeCode else { return previous ?? AccountQuota.cached(account) }
             var local = AccountQuota.cached(account)
             if queryingAccountIDs.contains(account.id), let previous,
@@ -206,7 +235,7 @@ final class UsageStore: ObservableObject {
             return local
         }
         let pending = accountQuotas.filter { reading in
-            guard !queryingAccountIDs.contains(reading.id) else { return false }
+            guard reading.account.tool != .antigravity, !queryingAccountIDs.contains(reading.id) else { return false }
             if !manual, reading.account.tool == .claudeCode {
                 guard prefs.automaticClaudeQuotaQueries else { return false }
                 if ClaudeConfigReader.isFresh(reading.quota, maxAge: maxAge, now: now) { return false }
@@ -325,7 +354,7 @@ final class UsageStore: ObservableObject {
 
     private func accountFeeds() -> [String: RateLimitSnapshot] {
         accountQuotas.reduce(into: [:]) { feeds, reading in
-            if reading.account.tool == .claudeCode {
+            if reading.account.tool != .codex {
                 feeds[reading.id] = RateLimitBridge.load(accountID: reading.id)
             }
         }
@@ -383,13 +412,18 @@ final class UsageStore: ObservableObject {
         let origin = await PriceService.shared.origin
         let fetchedAt = await PriceService.shared.lastFetch
 
+        let antigravityLimits = accountQuotas.first { $0.account.tool == .antigravity }?.quota
         let quotaConfig = Tool.allCases.reduce(into: [Tool: DashboardBuilder.QuotaConfig]()) { table, tool in
             let configured = prefs.planName[tool.rawValue]
+            let detected: (plan: String?, limits: RateLimitSnapshot?) = switch tool {
+            // The tier Claude Code records locally, unless overridden.
+            case .claudeCode: (PlanReader.claudeCodePlan(), liveLimits)
+            case .codex: (codexReading?.plan, codexReading?.quota)
+            case .antigravity: (nil, antigravityLimits)
+            }
             table[tool] = DashboardBuilder.QuotaConfig(
-                // The tier Claude Code records locally, unless overridden.
-                planName: (configured?.isEmpty == false ? configured : nil)
-                    ?? (tool == .claudeCode ? PlanReader.claudeCodePlan() : codexReading?.plan),
-                rateLimits: tool == .claudeCode ? liveLimits : codexReading?.quota,
+                planName: (configured?.isEmpty == false ? configured : nil) ?? detected.plan,
+                rateLimits: detected.limits,
                 remainingResets: tool == .codex ? codexReading?.remainingResets : nil
             )
         }

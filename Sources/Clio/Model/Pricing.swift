@@ -80,6 +80,7 @@ enum ModelNaming {
         if model.hasPrefix("claude-") { return "anthropic" }
         if model.hasPrefix("glm-") { return "zai" }
         if model.hasPrefix("deepseek-") { return "deepseek" }
+        if model.hasPrefix("gemini-") { return "google" }
         if ["gpt-", "chatgpt-", "o1", "o3", "o4", "text-embedding-"].contains(where: { model.hasPrefix($0) }) {
             return "openai"
         }
@@ -95,10 +96,13 @@ enum ModelNaming {
         return known ? name : model
     }
 
-    /// `claude-opus-5-5` → "Opus 5.5", `claude-haiku-4-5-20251001` → "Haiku 4.5".
-    /// Ids of any other shape are shown as they are.
+    /// `claude-opus-5-5` → "Opus 5.5", `claude-haiku-4-5-20251001` → "Haiku 4.5",
+    /// `gemini-3.8-flash` → "Gemini 3.8 Flash". Ids of any other shape are shown as they are.
     static func displayName(for model: String) -> String {
         if model == "codex:unknown" { return "Codex" }
+        if model.wholeMatch(of: #/gemini-\d+(\.\d+)?(-[a-z]+)+/#) != nil {
+            return model.split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+        }
         guard let match = model.wholeMatch(of: #/claude-([a-z]+)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?/#)
         else { return model }
         let version = [match.2, match.3].compactMap { $0 }.joined(separator: ".")

@@ -120,6 +120,41 @@ enum AccountQuotaTests {
         precondition(partial?.fiveHour?.usedPercentage == 2 && partial?.sevenDay?.usedPercentage == 45,
                      "a session that has not seen the 5-hour window cannot erase it")
 
+        // agy names its login in each run's log and pushes quota buckets under that email.
+        let agyLogs = home.appending(path: ".gemini/antigravity-cli/log")
+        try FileManager.default.createDirectory(at: agyLogs, withIntermediateDirectories: true)
+        try "I1126 applyAuthResult: email=Agy@example.com, authMethod=consumer"
+            .write(to: agyLogs.appending(path: "cli-20261126_100000.log"), atomically: true, encoding: .utf8)
+        try "I1127 started before signing in"
+            .write(to: agyLogs.appending(path: "cli-20261127_100000.log"), atomically: true, encoding: .utf8)
+        try "I1128 applyAuthResult: email=server@example.com, authMethod=consumer"
+            .write(to: agyLogs.appending(path: "acp-server-20261128_100000.log"), atomically: true, encoding: .utf8)
+        let agy = QuotaAccount.antigravity(home: home)!
+        precondition(agy.name == "Agy@example.com" && agy.id == RateLimitBridge.antigravityID("agy@example.com"),
+                     "the newest CLI log naming a login identifies the account")
+        precondition(QuotaAccount.discover(home: home).last == agy, "Antigravity is listed after Claude Code and Codex")
+        precondition(AccountQuota.cached(agy, support: home).status == "尚未推送")
+        let agyReset = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 + 3600).rounded())
+        let agyPayload = try JSONSerialization.data(withJSONObject: [
+            "product": "antigravity", "email": "agy@example.com",
+            "quota": [
+                "gemini-5h": ["remaining_fraction": 0.75, "reset_time": ISO8601DateFormatter().string(from: agyReset)],
+                "gemini-weekly": ["remaining_fraction": 1, "reset_time": "1970-01-01T00:00:00Z"],
+                "3p-5h": ["remaining_fraction": 0.1, "reset_time": "1970-01-01T00:00:00Z"],
+            ],
+        ])
+        RateLimitBridge.capture(agyPayload, configDirectory: nil, home: home, support: home)
+        let agyQuota = AccountQuota.cached(agy, support: home)
+        precondition(agyQuota.status == "状态栏推送" && agyQuota.quota?.fiveHour == RateLimitWindow(usedPercentage: 25, resetsAt: agyReset)
+                     && agyQuota.quota?.sevenDay == RateLimitWindow(usedPercentage: 0, resetsAt: nil),
+                     "the Gemini buckets become the windows; an unused bucket has no reset time")
+        precondition(RateLimitBridge.load(accountID: primary.id, support: home)?.fiveHour?.usedPercentage == 2,
+                     "an agy payload never lands on a Claude account")
+        var staleAgy = agyQuota
+        staleAgy.quota?.updatedAt = .distantPast
+        precondition(staleAgy.displayedFraction(staleAgy.quota!.fiveHour!, automaticClaudeQueries: true, queryInterval: 900) == 0.25,
+                     "pushed agy quota holds until its window resets")
+
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let oldQuota = AccountQuota(account: second,
             quota: RateLimitSnapshot(updatedAt: now.addingTimeInterval(-86400),

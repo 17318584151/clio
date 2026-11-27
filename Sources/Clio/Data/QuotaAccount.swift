@@ -21,10 +21,11 @@ struct QuotaAccount: Identifiable, Equatable {
         candidates.append(orca.appending(path: "codex-runtime-home/home"))
         candidates += extraDirectories.map { URL(fileURLWithPath: $0) }
         var seen = Set<String>()
-        let accounts: [QuotaAccount] = candidates.compactMap { directory in
+        var accounts: [QuotaAccount] = candidates.compactMap { directory in
             guard let account = read(directory: directory, home: home), seen.insert(account.id).inserted else { return nil }
             return account
         }
+        if let antigravity = antigravity(home: home) { accounts.append(antigravity) }
         return Tool.allCases.flatMap { tool in accounts.filter { $0.tool == tool } }
     }
 
@@ -35,6 +36,22 @@ struct QuotaAccount: Identifiable, Equatable {
         let pointer = orcaRoot(home).appending(path: "claude-profiles/selected-host")
         guard let path = try? String(contentsOf: pointer, encoding: .utf8) else { return nil }
         return read(directory: path.isEmpty ? home.appending(path: ".claude") : URL(fileURLWithPath: path), home: home)?.id
+    }
+
+    /// agy keeps no readable credentials, but each run logs the signed-in
+    /// account early on. The newest log that names one is the current login.
+    static func antigravity(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> QuotaAccount? {
+        let directory = home.appending(path: ".gemini/antigravity-cli")
+        let logs = (try? FileManager.default.contentsOfDirectory(atPath: directory.appending(path: "log").path)) ?? []
+        for name in logs.filter({ $0.hasPrefix("cli-") }).sorted(by: >) {
+            guard let handle = FileHandle(forReadingAtPath: directory.appending(path: "log/\(name)").path) else { continue }
+            let head = String(decoding: handle.readData(ofLength: 64 * 1024), as: UTF8.self)
+            try? handle.close()
+            guard let email = head.matches(of: #/applyAuthResult: email=([^,\s]+)/#).last?.1 else { continue }
+            return QuotaAccount(id: RateLimitBridge.antigravityID(String(email)), tool: .antigravity, name: String(email),
+                                directory: directory, profile: directory.appending(path: "settings.json"), isDefault: true)
+        }
+        return nil
     }
 
     private static func orcaRoot(_ home: URL) -> URL {
@@ -89,7 +106,8 @@ struct AccountQuota: Identifiable {
 
     func displayedFraction(_ window: RateLimitWindow, now: Date = Date(),
                            automaticClaudeQueries: Bool, queryInterval: TimeInterval) -> Double? {
-        if account.tool == .claudeCode, !automaticClaudeQueries {
+        // Pushed quotas arrive only while the tool runs, so they hold until their window resets.
+        if account.tool == .antigravity || (account.tool == .claudeCode && !automaticClaudeQueries) {
             return window.isCurrent(at: now) ? window.fraction : nil
         }
         let valid = quota.map { now.timeIntervalSince($0.updatedAt) < queryInterval * 2 } ?? false
@@ -99,14 +117,15 @@ struct AccountQuota: Identifiable {
     static func cached(_ account: QuotaAccount, support: URL = AppPaths.support) -> AccountQuota {
         let data = try? Data(contentsOf: account.profile)
         let cache = account.tool == .claudeCode ? data.flatMap(ClaudeConfigReader.parse) : nil
-        let feed = account.tool == .claudeCode ? RateLimitBridge.load(accountID: account.id, support: support) : nil
+        let feed = account.tool == .codex ? nil : RateLimitBridge.load(accountID: account.id, support: support)
         // Choose a snapshot as a unit so both windows share the shown timestamp.
         let pushed = feed.map { $0.updatedAt > (cache?.updatedAt ?? .distantPast) } ?? false
         let quota = pushed ? feed?.stabilized(against: cache, now: Date()) : cache
         return AccountQuota(account: account,
             quota: quota,
             plan: account.tool == .claudeCode ? data.flatMap(PlanReader.parse) : nil,
-            status: pushed ? "状态栏推送" : quota == nil ? "尚未查询" : "本地缓存")
+            status: pushed ? "状态栏推送" : quota != nil ? "本地缓存"
+                : account.tool == .antigravity ? "尚未推送" : "尚未查询")
     }
 
     static func fetch(_ account: QuotaAccount, maxAge: TimeInterval = 1800, now: Date = Date(),
@@ -127,6 +146,8 @@ struct AccountQuota: Identifiable {
                 reading.status = "已查询"
             }
             return reading
+        case .antigravity:
+            return cached(account)
         case .codex:
             let result = CodexUsageProbe.fetch(configDirectory: account.directory)
             return AccountQuota(account: account, quota: result?.quota, plan: result?.plan,

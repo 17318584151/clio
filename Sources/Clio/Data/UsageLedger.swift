@@ -9,8 +9,11 @@ struct UsageLedger: Codable, Equatable {
     var days: [String: Int]
 
     private static func path(for tool: Tool) -> URL {
-        let name = tool == .claudeCode ? "daily-tokens.json" : "codex-daily-tokens.json"
-        return AppPaths.support.appending(path: name)
+        switch tool {
+        case .claudeCode: return AppPaths.support.appending(path: "daily-tokens.json")
+        case .codex: return AppPaths.support.appending(path: "codex-daily-tokens.json")
+        case .antigravity: return AppPaths.support.appending(path: "antigravity-daily-tokens.json")
+        }
     }
 
     static func load(for tool: Tool) -> UsageLedger? {

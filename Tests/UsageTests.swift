@@ -14,8 +14,11 @@ enum UsageTests {
         for name in ["gpt-5", "GPT-4o", "openai/gpt-6-sol", "gpt4o", "azure:gpt-4.1", "codex-auto-review", "CODEX-AUTO-REVIEW"] {
             expect(ModelCategory(model: name) == .codex, "Codex model category: \(name)")
         }
-        for name in ["", "unknown", "codex", "deepseek/deepseek-v4-pro", "notclaude", "gptish", "gemini-3", "my-codex-model", "codex-auto-review-experimental"] {
+        for name in ["", "unknown", "codex", "deepseek/deepseek-v4-pro", "notclaude", "gptish", "geminis-3", "my-codex-model", "codex-auto-review-experimental"] {
             expect(ModelCategory(model: name) == .other, "Other model category: \(name)")
+        }
+        for name in ["gemini-3", "Gemini-3.8-Flash", "google/gemini-4-neon"] {
+            expect(ModelCategory(model: name) == .gemini, "Gemini model category: \(name)")
         }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
@@ -34,20 +37,21 @@ enum UsageTests {
         ], prices: prices, now: now, calendar: calendar)
         let range = UsageDateRange(start: date, end: date, today: now, calendar: calendar)
         let selected = parts.map { DashboardBuilder.selecting($0.usage, range: range, calendar: calendar) }
-        expect(selected.map { $0.totals[.custom]!.total } == [30, 57, 20], "Models classify across source readers")
+        expect(selected.map { $0.totals[.custom]!.total } == [30, 57, 0, 20], "Models classify across source readers")
         expect(selected[0].models[.custom]?.map(\.model) == ["claude-fable-5-1"], "Model detail follows category")
-        expect(selected[2].buckets[.custom]?.reduce(0, { $0 + $1.tokens }) == 20, "Other chart includes all tokens")
+        expect(selected[3].buckets[.custom]?.reduce(0, { $0 + $1.tokens }) == 20, "Other chart includes all tokens")
         let merged = DashboardBuilder.combined(selected, events: claude + codex, now: now, calendar: calendar)
         expect(merged.totals[.custom]?.total == 107, "Combined equals three categories including automatic review")
-        expect(parts.map { $0.usage.totals[.month]!.total } == [30, 57, 20], "Legacy history days without logs are left out")
+        expect(parts.map { $0.usage.totals[.month]!.total } == [30, 57, 0, 20], "Legacy history days without logs are left out")
         let verified = CategoryLedger(timeZone: calendar.timeZone.identifier,
                                      days: ["2026-10-17": ["claudeCode": 30, "codex": 17, "other": 60]])
         let missing = DashboardBuilder.categorized([
             (.claudeCode, [], UsageLedger(days: ["2026-10-17": 37])),
             (.codex, [], UsageLedger(days: ["2026-10-17": 70]))
         ], prices: prices, now: now, calendar: calendar, verified: verified)
-        expect(missing.map { $0.usage.totals[.month]!.total } == [30, 17, 60], "Verified day survives log retention")
-        expect(missing.allSatisfy { $0.usage.unavailableDetails.contains(.month) }, "Missing details remain unavailable")
+        expect(missing.map { $0.usage.totals[.month]!.total } == [30, 17, 0, 60], "Verified day survives log retention")
+        expect(missing.filter { $0.usage.totals[.month]!.total > 0 }.allSatisfy { $0.usage.unavailableDetails.contains(.month) },
+               "Missing details remain unavailable")
         for totals in [["claudeCode": 30, "codex": 10, "other": 60],
                        ["claudeCode": 30, "codex": 10, "other": 67]] {
             let stale = CategoryLedger(timeZone: calendar.timeZone.identifier, days: ["2026-10-17": totals])
@@ -55,9 +59,9 @@ enum UsageTests {
                 (.claudeCode, claude, UsageLedger(days: ["2026-10-17": 37])),
                 (.codex, codex, UsageLedger(days: ["2026-10-17": 70]))
             ], prices: prices, now: now, calendar: calendar, verified: stale)
-            expect(recovered.map { $0.usage.totals[.month]!.total } == [30, 57, 20],
+            expect(recovered.map { $0.usage.totals[.month]!.total } == [30, 57, 0, 20],
                    "Recovered model details supersede incompatible saved classification without duplication")
-            expect(recovered.map { $0.usage.dailyTokens[calendar.startOfDay(for: date)] ?? 0 } == [30, 57, 20],
+            expect(recovered.map { $0.usage.dailyTokens[calendar.startOfDay(for: date)] ?? 0 } == [30, 57, 0, 20],
                    "Recovered details and heatmap retain the same category totals")
         }
         expect(selected[1].models[.custom]?.contains { $0.model == "codex-auto-review" && $0.tokens == 7 } == true,
@@ -66,13 +70,13 @@ enum UsageTests {
                         event("codex-auto-review", 700)]
         let repaired = DashboardBuilder.categorized([(.codex, incident, nil)], prices: prices,
                                                     now: now, calendar: calendar)
-        expect(repaired.map { $0.usage.totals[.month]!.total } == [54_000, 42_700, 0],
+        expect(repaired.map { $0.usage.totals[.month]!.total } == [54_000, 42_700, 0, 0],
                "Synthetic automatic review data preserves category totals")
         expect(DashboardBuilder.combined(repaired.map(\.usage), events: incident, now: now,
                                          calendar: calendar).totals[.month]?.total == 96_700,
                "Automatic review reclassification preserves combined total")
-        expect(UsageScope.combined.next.next.next == .other && UsageScope.other.next == .combined,
-               "Scope includes other category")
+        expect(UsageScope.codex.next == .gemini && UsageScope.gemini.next == .other && UsageScope.other.next == .combined,
+               "Scope includes the Gemini and other categories")
     }
 
     static func main() throws {
@@ -1437,7 +1441,7 @@ enum UsageTests {
         let unknown = UsageEvent(timestamp: now, model: "unknown", counts: .init(reportedTotal: 10_000), dedupeKey: "unknown")
         let unknownParts = DashboardBuilder.categorized([(.codex, [unknown], nil), (.claudeCode, [unknown], nil)],
                                                        prices: rates, now: now, calendar: .current)
-        expect(unknownParts.map { $0.usage.totals[.day]?.total ?? 0 } == [0, 10_000, 10_000],
+        expect(unknownParts.map { $0.usage.totals[.day]?.total ?? 0 } == [0, 10_000, 0, 10_000],
                "only Codex-source unknown events belong to the Codex category")
         let codexRow = unknownParts[1].usage.models[.day]?.first
         expect(codexRow?.displayName == "Codex" && codexRow?.sources.first?.model == "unknown",

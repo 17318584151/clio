@@ -45,6 +45,7 @@ struct Theme {
     /// Each tool's color where their shares are drawn together.
     var claudeSeries: Color
     var codexSeries: Color
+    var geminiSeries: Color
     /// Model colors in allocation order, shared by the share bar and legend.
     var modelPalette: [Color]
 
@@ -79,6 +80,7 @@ struct Theme {
                   Color(hex: 0x9380DC), Color(hex: 0x6E56CF)],
         claudeSeries: Color(hex: 0xD97757),
         codexSeries: Color(hex: 0x0A84FF),
+        geminiSeries: Color(hex: 0x12A594),
         modelPalette: [Color(hex: 0x1BAF7A), Color(hex: 0xEDA100), Color(hex: 0xE87BA4),
                        Color(hex: 0x008300), Color(hex: 0x6250D6), Color(hex: 0xE34948),
                        Color(hex: 0x397BC9), Color(hex: 0xA46536), Color(hex: 0x1696A3),
@@ -116,6 +118,7 @@ struct Theme {
                   Color(hex: 0x7B67E0), Color(hex: 0xB6A8FF)],
         claudeSeries: Color(hex: 0xD0704F),
         codexSeries: Color(hex: 0x0A84FF),
+        geminiSeries: Color(hex: 0x2DBBA8),
         modelPalette: [Color(hex: 0x199E70), Color(hex: 0xC98500), Color(hex: 0xD55181),
                        Color(hex: 0x008300), Color(hex: 0x9085E9), Color(hex: 0xE66767),
                        Color(hex: 0x69A5EB), Color(hex: 0xC18C5D), Color(hex: 0x46B9C6),
@@ -140,12 +143,13 @@ struct Theme {
         switch category {
         case .claudeCode: return claudeSeries
         case .codex: return codexSeries
+        case .gemini: return geminiSeries
         case .other: return textSecondary
         }
     }
 
     func series(_ tool: Tool) -> Color {
-        tool == .claudeCode ? claudeSeries : codexSeries
+        categorySeries(ModelCategory(legacyTool: tool))
     }
 
     func modelColor(at index: Int) -> Color {

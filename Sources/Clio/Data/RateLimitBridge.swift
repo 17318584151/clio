@@ -1,10 +1,10 @@
 import Foundation
 import CryptoKit
 
-/// The second source of quota state: what Claude Code hands its status line.
+/// The second source of quota state: what Claude Code and agy hand their status line.
 ///
 /// Running this binary as that command (or in front of an existing one) writes
-/// the `rate_limits` payload where the panel can read it, and forwards stdin to
+/// the quota payload where the panel can read it, and forwards stdin to
 /// the wrapped command untouched so an existing status line keeps rendering.
 /// It arrives on every status-line render, which is far more often than the
 /// panel would poll on its own — but it has never carried the model-scoped
@@ -26,9 +26,14 @@ enum RateLimitBridge {
 
     static func capture(_ data: Data, accountID: String? = nil, configDirectory: String?,
                         home: URL = FileManager.default.homeDirectoryForCurrentUser, support: URL = AppPaths.support) {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let limits = root["rate_limits"] as? [String: Any]
-        else { return }
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        if root["product"] as? String == "antigravity" {
+            guard let email = root["email"] as? String, !email.isEmpty,
+                  let quota = root["quota"] as? [String: Any] else { return }
+            store(antigravitySnapshot(quota), accountID: antigravityID(email), support: support)
+            return
+        }
+        guard let limits = root["rate_limits"] as? [String: Any] else { return }
         let directory = (configDirectory.map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".claude"))
             .standardizedFileURL.resolvingSymlinksInPath()
         // Orca synchronizes statusLine settings between profiles. Resolve the
@@ -40,8 +45,16 @@ enum RateLimitBridge {
               let account = login["oauthAccount"] as? [String: Any],
               let currentID = ClaudeConfigReader.accountID(account),
               accountID == nil || currentID == accountID else { return }
-        let accountID = currentID
-        var reading = snapshot(from: limits)
+        store(snapshot(from: limits), accountID: currentID, support: support)
+    }
+
+    /// agy reports its login by email only.
+    static func antigravityID(_ email: String) -> String {
+        "antigravity:\(email.lowercased())"
+    }
+
+    private static func store(_ reading: RateLimitSnapshot, accountID: String, support: URL) {
+        var reading = reading
         guard reading.fiveHour?.usedPercentage != nil || reading.sevenDay?.usedPercentage != nil else { return }
         if let previous = load(accountID: accountID, support: support) {
             // Each session reports only the windows its own responses carried,
@@ -69,6 +82,19 @@ enum RateLimitBridge {
                           fiveHour: window(limits["five_hour"]),
                           sevenDay: window(limits["seven_day"]),
                           modelScoped: scoped(limits["model_scoped"]))
+    }
+
+    /// agy reports buckets by id with the share remaining; the Gemini buckets
+    /// are its five-hour and weekly windows. An unused bucket resets at the epoch.
+    static func antigravitySnapshot(_ quota: [String: Any]) -> RateLimitSnapshot {
+        func bucket(_ id: String) -> RateLimitWindow? {
+            guard let bucket = quota[id] as? [String: Any], bucket["disabled"] as? Bool != true,
+                  let remaining = number(bucket["remaining_fraction"]) else { return nil }
+            return RateLimitWindow(usedPercentage: min(100, max(0, (1 - remaining) * 100)),
+                                   resetsAt: date(bucket["reset_time"]).flatMap { $0.timeIntervalSince1970 > 0 ? $0 : nil })
+        }
+        return RateLimitSnapshot(updatedAt: Date(), fiveHour: bucket("gemini-5h"),
+                                 sevenDay: bucket("gemini-weekly"), modelScoped: [])
     }
 
     private static func window(_ value: Any?) -> RateLimitWindow? {

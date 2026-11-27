@@ -36,7 +36,7 @@ enum RefreshTests {
         try await codexTimingEnrichment(root)
         await MainActor.run {
             let now = Date()
-            let parts = zip(ModelCategory.allCases, [1000, 2000, 3000]).map { category, tokens in
+            let parts = zip(ModelCategory.allCases, [1000, 2000, 3000, 4000]).map { category, tokens in
                 CategoryUsage(tool: category, usage: DashboardBuilder.usage(tool: category,
                     [UsageEvent(timestamp: now, model: category.rawValue,
                                 counts: TokenCounts(input: tokens), dedupeKey: category.rawValue)],
@@ -45,8 +45,8 @@ enum RefreshTests {
             let dashboard = Dashboard(snapshots: [],
                 combined: DashboardBuilder.combined(parts.map(\.usage), events: [], now: now),
                 updatedAt: now, categories: parts)
-            expect(MenuBarDisplay.dualQuotaAndSeparateTodayTokens.todayTokenText(dashboard) == "1K 2K 3K",
-                   "Separate menu bar totals include Claude, Codex and other")
+            expect(MenuBarDisplay.dualQuotaAndSeparateTodayTokens.todayTokenText(dashboard) == "1K 2K 3K 4K",
+                   "Separate menu bar totals include Claude, Codex, Gemini and other")
             expect(MenuBarDisplay.dualQuota.showsQuota && !MenuBarDisplay.dualQuota.showsQuotaPercentages
                    && MenuBarDisplay.dualQuota.todayTokenText(dashboard) == nil,
                    "Rings-only menu bar shows neither percentages nor tokens")
@@ -99,7 +99,8 @@ enum RefreshTests {
         let manualGate = DispatchSemaphore(value: 0)
         let readers = LogReaders(
             claude: ClaudeCodeReader(root: root.appending(path: "no-claude-logs"), sleepHistory: { SleepTimeline() }),
-            codex: CodexReader(root: root.appending(path: "no-codex-logs"), sleepHistory: { SleepTimeline() }))
+            codex: CodexReader(root: root.appending(path: "no-codex-logs"), sleepHistory: { SleepTimeline() }),
+            antigravity: AntigravityReader(roots: []))
         let store = UsageStore(readers: readers, accountQuery: { account, _, force in
             recorder.record(force ? "manual:\(account.id)" : account.tool == .claudeCode ? "automatic-claude" : "automatic-codex")
             if force { manualGate.wait() }
@@ -215,7 +216,8 @@ enum RefreshTests {
         ]
         try (JSONSerialization.data(withJSONObject: record) + Data([10])).write(to: file)
         let reader = CodexReader(root: logs, sleepHistory: { SleepTimeline() })
-        let readers = LogReaders(claude: ClaudeCodeReader(root: root.appending(path: "absent"), sleepHistory: { SleepTimeline() }), codex: reader)
+        let readers = LogReaders(claude: ClaudeCodeReader(root: root.appending(path: "absent"), sleepHistory: { SleepTimeline() }), codex: reader,
+                                 antigravity: AntigravityReader(roots: []))
         func config(_ percentage: Double, resets: Int) -> [Tool: DashboardBuilder.QuotaConfig] {
             [.codex: .init(rateLimits: .init(updatedAt: now, fiveHour: .init(usedPercentage: percentage,
                            resetsAt: now.addingTimeInterval(3600)), sevenDay: nil, modelScoped: []), remainingResets: resets)]
@@ -229,7 +231,8 @@ enum RefreshTests {
                "manual reset preserves usage")
         expect(reader.revision == revision, "quota update does not read Codex logs")
         let corrected = LogReaders(claude: ClaudeCodeReader(root: root.appending(path: "absent"), sleepHistory: { SleepTimeline() }),
-                                   codex: CodexReader(root: logs, sleepHistory: { SleepTimeline() }))
+                                   codex: CodexReader(root: logs, sleepHistory: { SleepTimeline() }),
+                                   antigravity: AntigravityReader(roots: []))
         func weekly(_ percentage: Double, at timestamp: Date, resets: Int? = nil) -> [Tool: DashboardBuilder.QuotaConfig] {
             [.codex: .init(rateLimits: .init(updatedAt: timestamp, fiveHour: nil,
                 sevenDay: .init(usedPercentage: percentage, resetsAt: now.addingTimeInterval(86400)), modelScoped: []),
@@ -288,7 +291,7 @@ enum RefreshTests {
         let reader = CodexReader(root: logs, sleepHistory: { sleeps })
         let readers = LogReaders(
             claude: ClaudeCodeReader(root: base.appending(path: "absent"), sleepHistory: { SleepTimeline() }),
-            codex: reader)
+            codex: reader, antigravity: AntigravityReader(roots: []))
         let first = await readers.dashboard(prices: .builtin, quota: [:], quotaMaxAge: 600, now: now)
         expect(first.combined.models[.day]?.first?.outputSpeed.tokensPerSecond == nil, "initial model has no timing")
         let context: [String: Any] = [
@@ -337,7 +340,8 @@ enum RefreshTests {
         }
         try data.write(to: file)
         let claude = ClaudeCodeReader(root: logs, sleepHistory: { SleepTimeline() })
-        let readers = LogReaders(claude: claude, codex: CodexReader(root: root.appending(path: "sessions"), sleepHistory: { SleepTimeline() }))
+        let readers = LogReaders(claude: claude, codex: CodexReader(root: root.appending(path: "sessions"), sleepHistory: { SleepTimeline() }),
+                                 antigravity: AntigravityReader(roots: []))
         let prices = PriceTable(prices: ["test": .make(input: 1, output: 1)])
         let start = Date()
         let first = await readers.dashboard(prices: prices, quota: [:], quotaMaxAge: 600, now: now, calendar: calendar)
