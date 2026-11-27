@@ -1,18 +1,5 @@
 import Foundation
 
-/// Account refresh tests must never launch a real CLI or touch real logins.
-enum UsageProbe {
-    static var calls: [URL?] = []
-    static var response: ((URL?) -> RateLimitSnapshot?)?
-
-    static func systemProxyEnvironment() -> [String: String] { [:] }
-
-    static func fetch(configDirectory: URL? = nil, maxAge: TimeInterval = 1800) -> RateLimitSnapshot? {
-        calls.append(configDirectory)
-        return response?(configDirectory)
-    }
-}
-
 @main
 enum AccountQuotaTests {
     static func main() throws {
@@ -42,9 +29,9 @@ enum AccountQuotaTests {
         let second = accounts.first { $0.name == "second@example.com" }!
         precondition(second.directory == managed.standardizedFileURL.resolvingSymlinksInPath())
         precondition(AccountQuota.cached(second).quota?.sevenDay?.usedPercentage == 4)
-        let fresh = AccountQuota.fetch(second)
-        precondition(UsageProbe.calls.isEmpty, "fresh local quota must not launch Claude CLI")
-        precondition(fresh.quota?.sevenDay?.usedPercentage == 4, "fresh local quota remains visible")
+        let fetched = AccountQuota.fetch(second)
+        precondition(fetched.quota?.sevenDay?.usedPercentage == 4 && fetched.status == "本地缓存",
+                     "Claude accounts are never queried; fetching returns the local reading")
         let primary = accounts.first { $0.name == "default@example.com" }!
         precondition(QuotaAccount.orcaClaudeAccountID(home: home) == nil, "without managed accounts Orca singles out none")
         let pointer = home.appending(path: "Library/Application Support/orca/claude-profiles/selected-host")
@@ -152,7 +139,7 @@ enum AccountQuotaTests {
                      "an agy payload never lands on a Claude account")
         var staleAgy = agyQuota
         staleAgy.quota?.updatedAt = .distantPast
-        precondition(staleAgy.displayedFraction(staleAgy.quota!.fiveHour!, automaticClaudeQueries: true, queryInterval: 900) == 0.25,
+        precondition(staleAgy.displayedFraction(staleAgy.quota!.fiveHour!, codexQueryInterval: 900) == 0.25,
                      "pushed agy quota holds until its window resets")
 
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -160,84 +147,23 @@ enum AccountQuotaTests {
             quota: RateLimitSnapshot(updatedAt: now.addingTimeInterval(-86400),
                 fiveHour: RateLimitWindow(usedPercentage: 25, resetsAt: now.addingTimeInterval(-3600)),
                 sevenDay: RateLimitWindow(usedPercentage: 40, resetsAt: now.addingTimeInterval(86400)),
-                modelScoped: []), status: "仅本地缓存")
-        precondition(oldQuota.displayedFraction(oldQuota.quota!.sevenDay!, now: now,
-            automaticClaudeQueries: false, queryInterval: 900) == 0.4,
-            "manual Claude mode keeps old percentages beyond the freshness limit")
-        precondition(oldQuota.displayedFraction(oldQuota.quota!.fiveHour!, now: now,
-            automaticClaudeQueries: false, queryInterval: 900) == nil,
-            "manual Claude mode clears the expired percentage without requesting an update")
-        precondition(oldQuota.displayedFraction(oldQuota.quota!.sevenDay!, now: now,
-            automaticClaudeQueries: true, queryInterval: 900) == nil,
-            "automatic Claude mode still rejects stale readings")
+                modelScoped: []), status: "本地缓存")
+        precondition(oldQuota.displayedFraction(oldQuota.quota!.sevenDay!, now: now, codexQueryInterval: 900) == 0.4,
+                     "Claude keeps old percentages until the window resets")
+        precondition(oldQuota.displayedFraction(oldQuota.quota!.fiveHour!, now: now, codexQueryInterval: 900) == nil,
+                     "an expired window is cleared without requesting an update")
         var codexQuota = oldQuota
         codexQuota.account = accounts.first { $0.tool == .codex }!
-        precondition(codexQuota.displayedFraction(oldQuota.quota!.sevenDay!, now: now,
-            automaticClaudeQueries: false, queryInterval: 900) == nil,
-            "disabling Claude queries does not bypass Codex freshness checks")
-        precondition(oldQuota.displayedFraction(RateLimitWindow(), now: now,
-            automaticClaudeQueries: false, queryInterval: 900) == nil,
-            "a genuinely missing percentage remains unknown")
-        func checkCache(_ value: [String: Any], queries: Int, _ message: String) throws {
-            try write(second.profile, value)
-            UsageProbe.calls = []
-            UsageProbe.response = { directory in
-                precondition(directory == second.directory, "CLI queries use the account's own directory")
-                let data = try! JSONSerialization.data(withJSONObject: claude("second", 12))
-                try! data.write(to: second.profile)
-                return ClaudeConfigReader.parse(data)
-            }
-            let reading = AccountQuota.fetch(second, maxAge: 1800, now: now)
-            precondition(UsageProbe.calls.count == queries, message)
-            if queries > 0 {
-                precondition(reading.quota?.sevenDay?.usedPercentage == 12, "CLI refresh reads the updated local cache")
-            }
-        }
-        func cache(age: TimeInterval, utilization: [String: Any] = ["seven_day": ["utilization": 4]]) -> [String: Any] {
-            var value = claude("second", 4)
-            value["cachedUsageUtilization"] = ["accountUuid": "second",
-                "fetchedAtMs": now.addingTimeInterval(-age).timeIntervalSince1970 * 1000,
-                "utilization": utilization]
-            return value
-        }
-        try checkCache(cache(age: 1799), queries: 0, "cache is reused until the configured expiry")
-        UsageProbe.response = { _ in
-            let data = try! JSONSerialization.data(withJSONObject: claude("second", 12))
-            try! data.write(to: second.profile)
-            return ClaudeConfigReader.parse(data)
-        }
-        _ = AccountQuota.fetch(second, maxAge: 1800, now: now, force: true)
-        precondition(UsageProbe.calls.count == 1, "explicit manual queries refresh even a fresh cache")
-        try checkCache(cache(age: 1800), queries: 1, "cache expires at the configured boundary")
-        try checkCache(cache(age: -60), queries: 1, "future-dated caches cannot suppress queries")
-        try checkCache(cache(age: 60, utilization: ["seven_day": ["utilization": 100]]), queries: 0,
-                       "fully consumed quota is still a valid cached reading")
-        try checkCache(cache(age: 60, utilization: ["seven_day": ["utilization": 0]]), queries: 0,
-                       "zero utilization is a known cached value")
-        try checkCache(cache(age: 60, utilization: [
-            "five_hour": ["utilization": 100, "resets_at": now.addingTimeInterval(-1).timeIntervalSince1970],
-            "seven_day": ["utilization": 4]]), queries: 1, "a reset window requires fresh quota")
-        try checkCache(cache(age: 60, utilization: [:]), queries: 1, "empty caches require a CLI query")
+        precondition(codexQuota.displayedFraction(oldQuota.quota!.sevenDay!, now: now, codexQueryInterval: 900) == nil,
+                     "Codex readings still lapse after two query intervals")
+        precondition(oldQuota.displayedFraction(RateLimitWindow(), now: now, codexQueryInterval: 900) == nil,
+                     "a genuinely missing percentage remains unknown")
         var missing = claude("second", 4)
         missing.removeValue(forKey: "cachedUsageUtilization")
-        try checkCache(missing, queries: 1, "missing caches require a CLI query")
-        var wrongOwner = cache(age: 60)
-        var payload = wrongOwner["cachedUsageUtilization"] as! [String: Any]
-        payload["accountUuid"] = "another-account"
-        wrongOwner["cachedUsageUtilization"] = payload
-        try checkCache(wrongOwner, queries: 1, "another account's cache must not suppress a query")
-        payload.removeValue(forKey: "accountUuid")
-        wrongOwner["cachedUsageUtilization"] = payload
-        try checkCache(wrongOwner, queries: 1, "cache ownership must be present for a known account")
-        try write(second.profile, cache(age: 1801))
-        UsageProbe.calls = []
-        UsageProbe.response = nil
-        let failed = AccountQuota.fetch(second, maxAge: 1800, now: now)
-        precondition(UsageProbe.calls.count == 1 && failed.quota == nil && failed.status == "查询失败",
-                     "failed refreshes never turn expired data into current quota")
-        let longerInterval = AccountQuota.fetch(second, maxAge: 3600, now: now)
-        precondition(UsageProbe.calls.count == 1 && longerInterval.quota != nil,
-                     "freshness follows the configured interval instead of a fixed duration")
-        print("Account quota checks passed: discovery, grouping, ownership, cache expiry and CLI fallback")
+        try write(second.profile, missing)
+        let unreported = QuotaAccount.read(directory: managed, home: home)!
+        precondition(AccountQuota.cached(unreported, support: home.appending(path: "empty")).status == "尚未推送",
+                     "a Claude account with neither cache nor push waits for its status line")
+        print("Account quota checks passed: discovery, grouping, ownership, status-line pushes and window expiry")
     }
 }

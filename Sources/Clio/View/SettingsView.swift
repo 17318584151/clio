@@ -238,24 +238,6 @@ struct SettingsContent: View {
                     .fixedSize()
                 }
                 .help("刷新本地用量与日志中的额度快照，菜单栏圆环随新的额度数据更新")
-                row("Claude Code 查询频率") {
-                    Picker("", selection: Binding(
-                        get: { prefs.automaticClaudeQuotaQueries ? prefs.quotaInterval : 0 },
-                        set: { interval in
-                            if interval > 0 { prefs.quotaInterval = interval }
-                            prefs.automaticClaudeQuotaQueries = interval > 0
-                        })) {
-                        Text("不自动查询").tag(0.0)
-                        Text("每 15 分钟").tag(900.0)
-                        Text("每 30 分钟").tag(1800.0)
-                        Text("每 1 小时").tag(3600.0)
-                        Text("每 2 小时").tag(7200.0)
-                    }
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .fixedSize()
-                }
-                .help("仅控制 Claude Code。不自动查询时仅读取本地缓存；需要更新可点击对应账号右侧的刷新按钮")
                 row("Codex 查询频率") {
                     Picker("", selection: $prefs.codexQuotaInterval) {
                         Text("每 15 分钟").tag(900.0)
@@ -267,7 +249,7 @@ struct SettingsContent: View {
                     .controlSize(.small)
                     .fixedSize()
                 }
-                .help("Codex 始终按此间隔自动查询，不受 Claude Code 的设置影响")
+                .help("Codex 没有状态栏推送，按此间隔自动查询额度；Claude Code 与 agy 的额度来自状态栏接入")
             }
 
             section("更新") {

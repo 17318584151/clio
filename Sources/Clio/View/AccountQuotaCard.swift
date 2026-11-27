@@ -4,7 +4,6 @@ struct AccountQuotaCard: View {
     let accounts: [AccountQuota]
     let queryingAccountIDs: Set<String>
     let orcaAccountID: String?
-    let onRefresh: (QuotaAccount) -> Void
 
     var body: some View {
         Card(spacing: 0) {
@@ -15,7 +14,7 @@ struct AccountQuotaCard: View {
                             Divider().padding(.vertical, 8)
                         }
                         AccountQuotaRow(reading: reading, isQuerying: queryingAccountIDs.contains(reading.id),
-                                        isOrca: reading.id == orcaAccountID) { onRefresh(reading.account) }
+                                        isOrca: reading.id == orcaAccountID)
                     }
                 }
             }
@@ -31,12 +30,7 @@ private struct AccountQuotaRow: View {
     let reading: AccountQuota
     let isQuerying: Bool
     let isOrca: Bool
-    let onRefresh: () -> Void
-    @State private var isHovering = false
     @Environment(\.theme) private var theme
-
-    /// agy only reports quota through its status line; there is nothing to query.
-    private var canRefresh: Bool { reading.account.tool != .antigravity }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -57,36 +51,17 @@ private struct AccountQuotaRow: View {
                 window("本周已用", reading.quota?.sevenDay)
             }
         }
-        .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
         .help(details)
     }
 
-    /// The update time gives way to the refresh button on hover, in the same space.
-    private var trailing: some View {
-        ZStack(alignment: .trailing) {
+    @ViewBuilder private var trailing: some View {
+        if isQuerying {
+            ProgressView().controlSize(.mini)
+        } else {
             Text(reading.quota.map { "更新 \(Format.quotaTime($0.updatedAt))" } ?? reading.status)
                 .font(.system(size: 9)).monospacedDigit()
                 .foregroundStyle(theme.textSecondary)
                 .lineLimit(1).fixedSize()
-                .opacity(isQuerying || (isHovering && canRefresh) ? 0 : 1)
-            if isQuerying {
-                ProgressView().controlSize(.mini).frame(width: 20, height: 20)
-            } else if canRefresh {
-                Button(action: onRefresh) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(theme.accent)
-                        .frame(width: 20, height: 20)
-                        .background(theme.segmentedFill, in: RoundedRectangle(cornerRadius: 5))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .opacity(isHovering ? 1 : 0)
-                .allowsHitTesting(isHovering)
-                .help("手动刷新 \(reading.account.name) 的额度（会联网查询）")
-                .accessibilityLabel("\(reading.account.name)：手动刷新额度")
-            }
         }
     }
 
@@ -104,7 +79,9 @@ private struct AccountQuotaRow: View {
         var lines = [reading.account.tool.displayName, reading.account.name, reading.status]
         if isOrca { lines.append("Orca 当前使用此账号") }
         if let quota = reading.quota { lines.append("数据获取于 \(Format.stamp(quota.updatedAt))") }
-        else if !canRefresh { lines.append("在设置中接入状态栏后，运行 agy 即可更新") }
+        else if reading.account.tool != .codex {
+            lines.append("在设置中接入状态栏后，运行 \(reading.account.tool == .antigravity ? "agy" : "Claude Code") 即可更新")
+        }
         for (title, window) in [("5 小时", reading.quota?.fiveHour), ("本周", reading.quota?.sevenDay)] {
             if let reset = window?.resetsAt { lines.append("\(title)重置于 \(Format.stamp(reset))") }
         }
@@ -114,9 +91,7 @@ private struct AccountQuotaRow: View {
     }
 
     private func window(_ title: String, _ value: RateLimitWindow?) -> some View {
-        let used = value.flatMap { reading.displayedFraction($0,
-            automaticClaudeQueries: Preferences.shared.automaticClaudeQuotaQueries,
-            queryInterval: Preferences.shared.queryInterval(for: reading.account.tool)) }
+        let used = value.flatMap { reading.displayedFraction($0, codexQueryInterval: Preferences.shared.codexQuotaInterval) }
         return VStack(spacing: 4) {
             HStack(spacing: 4) {
                 Text(title).foregroundStyle(theme.textSecondary)

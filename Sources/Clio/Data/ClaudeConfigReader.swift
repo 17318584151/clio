@@ -3,9 +3,8 @@ import Foundation
 /// Reads the quota state Claude Code caches in `~/.claude.json`.
 ///
 /// `cachedUsageUtilization` holds the quota payload and its fetch time.
-/// Claude Code refreshes it during normal use and when `/usage` runs.
-/// Reading the file costs nothing, so it is the
-/// first source tried; the CLI is asked only when the cache is missing or stale.
+/// Claude Code refreshes it during normal use; together with the status-line
+/// push it is the only Claude quota source, so it is never queried.
 enum ClaudeConfigReader {
     static func accountID(_ account: [String: Any]) -> String? {
         guard let uuid = account["accountUuid"] as? String, !uuid.isEmpty else { return nil }
@@ -20,14 +19,6 @@ enum ClaudeConfigReader {
     static func read(path: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude.json")) -> RateLimitSnapshot? {
         guard let data = try? Data(contentsOf: path) else { return nil }
         return parse(data)
-    }
-
-    static func isFresh(_ quota: RateLimitSnapshot?, maxAge: TimeInterval, now: Date = Date()) -> Bool {
-        guard let quota else { return false }
-        let age = now.timeIntervalSince(quota.updatedAt)
-        let windows = [quota.fiveHour, quota.sevenDay].compactMap { $0 }
-        return age >= 0 && age < maxAge && !windows.isEmpty
-            && windows.allSatisfy { $0.usedPercentage != nil && $0.isCurrent(at: now) }
     }
 
     /// Split from the file read so a payload can be checked on its own.

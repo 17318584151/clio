@@ -72,10 +72,6 @@ final class Preferences: ObservableObject {
     @Published var showModelSpeed: Bool { didSet { defaults.set(showModelSpeed, forKey: "showModelSpeed") } }
     @Published var confettiEnabled: Bool { didSet { defaults.set(confettiEnabled, forKey: "confettiEnabled") } }
     @Published var refreshInterval: TimeInterval { didSet { defaults.set(refreshInterval, forKey: "refreshInterval") } }
-    /// Claude Code only; Codex polls independently.
-    @Published var automaticClaudeQuotaQueries: Bool { didSet { defaults.set(automaticClaudeQuotaQueries, forKey: "automaticQuotaQueries") } }
-    /// Claude Code cache lifetime and optional background query interval.
-    @Published var quotaInterval: TimeInterval { didSet { defaults.set(quotaInterval, forKey: "quotaInterval") } }
     @Published var codexQuotaInterval: TimeInterval { didSet { defaults.set(codexQuotaInterval, forKey: "codexQuotaInterval") } }
     @Published var menuBarDisplay: MenuBarDisplay { didSet { defaults.set(menuBarDisplay.rawValue, forKey: "menuBarDisplay") } }
     @Published var usageScope: UsageScope { didSet { defaults.set(usageScope.rawValue, forKey: "usageScope") } }
@@ -105,8 +101,6 @@ final class Preferences: ObservableObject {
             "showModelSpeed": false,
             "confettiEnabled": true,
             "refreshInterval": 30.0,
-            "automaticQuotaQueries": false,
-            "quotaInterval": 1800.0,
             "codexQuotaInterval": 1800.0,
             "menuBarDisplay": MenuBarDisplay.iconAndTodayTokens.rawValue,
             "usageScope": UsageScope.combined.rawValue,
@@ -119,8 +113,6 @@ final class Preferences: ObservableObject {
         showModelSpeed = defaults.bool(forKey: "showModelSpeed")
         confettiEnabled = defaults.bool(forKey: "confettiEnabled")
         refreshInterval = defaults.double(forKey: "refreshInterval")
-        automaticClaudeQuotaQueries = defaults.bool(forKey: "automaticQuotaQueries")
-        quotaInterval = defaults.double(forKey: "quotaInterval")
         codexQuotaInterval = defaults.double(forKey: "codexQuotaInterval")
         menuBarDisplay = MenuBarDisplay(rawValue: defaults.string(forKey: "menuBarDisplay") ?? "") ?? .iconAndTodayTokens
         usageScope = UsageScope(rawValue: defaults.string(forKey: "usageScope") ?? "") ?? .combined
@@ -138,10 +130,6 @@ final class Preferences: ObservableObject {
 
     func shuffleTheme() {
         themePreset = ThemePreset.allCases.filter { $0 != themePreset }.randomElement()!
-    }
-
-    func queryInterval(for tool: Tool) -> TimeInterval {
-        tool == .claudeCode ? quotaInterval : codexQuotaInterval
     }
 
     private func applyLaunchAtLogin() {

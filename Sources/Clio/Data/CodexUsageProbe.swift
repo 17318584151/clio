@@ -1,4 +1,5 @@
 import Foundation
+import CFNetwork
 import Darwin
 
 /// Uses the local Codex client's stored login for read-only account queries.
@@ -35,7 +36,7 @@ enum CodexUsageProbe {
         environment["USER"] = NSUserName()
         if let configDirectory { environment["CODEX_HOME"] = configDirectory.path }
         environment["PATH"] = (environment["PATH"] ?? "/usr/bin:/bin") + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        environment.merge(UsageProbe.systemProxyEnvironment()) { current, _ in current }
+        environment.merge(systemProxyEnvironment()) { current, _ in current }
         process.environment = environment
         let input = Pipe()
         let output = Pipe()
@@ -139,5 +140,30 @@ enum CodexUsageProbe {
         let count = response.rateLimitResetCredits?.availableCount.flatMap { $0 >= 0 ? $0 : nil }
         return Reading(quota: quota, plan: limits?.planType.flatMap(PlanReader.codexDisplayName),
                        remainingResets: count)
+    }
+
+    /// The system's own proxy configuration, in the form command-line tools read.
+    static func systemProxyEnvironment() -> [String: String] {
+        guard let settings = CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any] else {
+            return [:]
+        }
+        var environment: [String: String] = [:]
+        func proxy(_ enable: CFString, _ host: CFString, _ port: CFString) -> String? {
+            guard settings[enable as String] as? Int == 1,
+                  let host = settings[host as String] as? String,
+                  let port = settings[port as String] as? Int
+            else { return nil }
+            return "http://\(host):\(port)"
+        }
+        if let https = proxy(kCFNetworkProxiesHTTPSEnable, kCFNetworkProxiesHTTPSProxy, kCFNetworkProxiesHTTPSPort) {
+            environment["HTTPS_PROXY"] = https
+        }
+        if let http = proxy(kCFNetworkProxiesHTTPEnable, kCFNetworkProxiesHTTPProxy, kCFNetworkProxiesHTTPPort) {
+            environment["HTTP_PROXY"] = http
+        }
+        if let exceptions = settings[kCFNetworkProxiesExceptionsList as String] as? [String], !exceptions.isEmpty {
+            environment["NO_PROXY"] = exceptions.joined(separator: ",")
+        }
+        return environment
     }
 }

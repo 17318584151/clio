@@ -178,9 +178,8 @@ final class UsageStore: ObservableObject {
     /// The Claude login Orca currently launches sessions with.
     @Published private(set) var orcaClaudeAccountID: String?
     private var lastAccountQueries: [String: Date] = [:]
-    private var lastDefaultQueries: [Tool: Date] = [:]
-    private let accountQuery: @Sendable (QuotaAccount, TimeInterval, Bool) -> AccountQuota
-    private let claudeQuery: @Sendable (TimeInterval) -> RateLimitSnapshot?
+    private var lastDefaultCodexQuery: Date?
+    private let accountQuery: @Sendable (QuotaAccount) -> AccountQuota
     private let codexQuery: @Sendable () -> CodexUsageProbe.Reading?
     private var extraAccountDirectories: [String] {
         UserDefaults.standard.stringArray(forKey: "accountDirectories") ?? []
@@ -208,45 +207,26 @@ final class UsageStore: ObservableObject {
         refreshAccounts(force: true)
     }
 
-    func refreshAccounts(force: Bool = false, manual: Bool = false) {
+    /// Status-line tools re-read their pushed feed each time; only Codex is queried.
+    func refreshAccounts(force: Bool = false) {
         guard !isPreview else { return }
         let accounts = QuotaAccount.discover(extraDirectories: extraAccountDirectories)
         orcaClaudeAccountID = QuotaAccount.orcaClaudeAccountID()
-        let maxAge = prefs.quotaInterval
         let now = Date()
         let previousAccounts = Dictionary(uniqueKeysWithValues: accountQuotas.map { ($0.id, $0) })
         accountQuotas = accounts.map { account in
-            let previous = previousAccounts[account.id].flatMap { $0.account == account ? $0 : nil }
-            if account.tool == .antigravity { return AccountQuota.cached(account) }
-            guard account.tool == .claudeCode else { return previous ?? AccountQuota.cached(account) }
-            var local = AccountQuota.cached(account)
-            if queryingAccountIDs.contains(account.id), let previous,
-               (previous.quota?.updatedAt ?? .distantPast) >= (local.quota?.updatedAt ?? .distantPast) {
-                return previous
-            }
-            if prefs.automaticClaudeQuotaQueries, previous?.status == "查询失败",
-               !ClaudeConfigReader.isFresh(local.quota, maxAge: maxAge, now: now) {
-                local.quota = nil
-                local.status = "查询失败"
-            }
-            if !manual, !prefs.automaticClaudeQuotaQueries, local.status != "状态栏推送" {
-                local.status = "仅本地缓存"
-            }
-            return local
+            guard account.tool == .codex else { return AccountQuota.cached(account) }
+            return previousAccounts[account.id].flatMap { $0.account == account ? $0 : nil } ?? AccountQuota.cached(account)
         }
+        let interval = prefs.codexQuotaInterval
         let pending = accountQuotas.filter { reading in
-            guard reading.account.tool != .antigravity, !queryingAccountIDs.contains(reading.id) else { return false }
-            if !manual, reading.account.tool == .claudeCode {
-                guard prefs.automaticClaudeQuotaQueries else { return false }
-                if ClaudeConfigReader.isFresh(reading.quota, maxAge: maxAge, now: now) { return false }
-            }
-            let interval = prefs.queryInterval(for: reading.account.tool)
-            return force || lastAccountQueries[reading.id].map { now.timeIntervalSince($0) >= interval } ?? true
+            reading.account.tool == .codex && !queryingAccountIDs.contains(reading.id)
+                && (force || lastAccountQueries[reading.id].map { now.timeIntervalSince($0) >= interval } ?? true)
         }
-        queryAccounts(pending, manual: manual)
+        queryAccounts(pending)
     }
 
-    private func queryAccounts(_ pending: [AccountQuota], manual: Bool) {
+    private func queryAccounts(_ pending: [AccountQuota]) {
         guard !pending.isEmpty else { return }
         queryingAccountIDs.formUnion(pending.map(\.id))
         let query = accountQuery
@@ -254,24 +234,13 @@ final class UsageStore: ObservableObject {
             for item in pending {
                 guard let self else { break }
                 let account = item.account
-                if !manual, account.tool == .claudeCode, !self.prefs.automaticClaudeQuotaQueries {
-                    self.queryingAccountIDs.remove(account.id)
-                    continue
-                }
-                let maxAge = self.prefs.queryInterval(for: account.tool)
                 self.lastAccountQueries[account.id] = Date()
-                let reading = await Task.detached(priority: .utility) { query(account, maxAge, manual) }.value
+                let reading = await Task.detached(priority: .utility) { query(account) }.value
                 if let index = self.accountQuotas.firstIndex(where: { $0.account == account }) {
-                    let current = self.accountQuotas[index]
-                    if current.status != "状态栏推送"
-                        || (current.quota?.updatedAt ?? .distantPast) <= (reading.quota?.updatedAt ?? .distantPast) {
-                        self.accountQuotas[index] = reading
-                    }
-                }
-                if account.isDefault, account.tool == .codex {
-                    self.codexReading = .init(quota: reading.quota, plan: reading.plan, remainingResets: reading.remainingResets)
+                    self.accountQuotas[index] = reading
                 }
                 if account.isDefault {
+                    self.codexReading = .init(quota: reading.quota, plan: reading.plan, remainingResets: reading.remainingResets)
                     await self.rebuildDashboard(scanLogs: false)
                 }
                 self.queryingAccountIDs.remove(account.id)
@@ -292,7 +261,6 @@ final class UsageStore: ObservableObject {
     private let prefs = Preferences.shared
     private var timer: Timer?
     private var refreshRequests = RefreshRequests()
-    @Published private var probeInFlight = false
     private var claudeQuota: RateLimitSnapshot?
     private var codexReading: CodexUsageProbe.Reading?
     @Published private var codexProbeInFlight = false
@@ -301,14 +269,10 @@ final class UsageStore: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
 
     init(readers: LogReaders = LogReaders(),
-         accountQuery: @escaping @Sendable (QuotaAccount, TimeInterval, Bool) -> AccountQuota = { account, maxAge, force in
-             AccountQuota.fetch(account, maxAge: maxAge, force: force)
-         },
-         claudeQuery: @escaping @Sendable (TimeInterval) -> RateLimitSnapshot? = { UsageProbe.fetch(maxAge: $0) },
+         accountQuery: @escaping @Sendable (QuotaAccount) -> AccountQuota = { AccountQuota.fetch($0) },
          codexQuery: @escaping @Sendable () -> CodexUsageProbe.Reading? = { CodexUsageProbe.fetch() }) {
         self.readers = readers
         self.accountQuery = accountQuery
-        self.claudeQuery = claudeQuery
         self.codexQuery = codexQuery
         accountQuotas = QuotaAccount.discover(extraDirectories: extraAccountDirectories).map { AccountQuota.cached($0) }
         orcaClaudeAccountID = QuotaAccount.orcaClaudeAccountID()
@@ -402,12 +366,10 @@ final class UsageStore: ObservableObject {
         let defaultAccount = accountQuotas.first { $0.account.tool == .claudeCode && $0.account.isDefault }
         let feed = defaultAccount?.quota
         let config = ClaudeConfigReader.read()
-        // Fresh enough to trust: two polling periods, so raising the interval
-        // in Settings doesn't make the panel drop the percentages in between.
-        let maxAge = prefs.quotaInterval * 2
+        // Pushed and cached quotas are never refreshed on demand, so they hold until their windows reset.
         let liveLimits = RateLimitSnapshot.merged([feed, config].compactMap { $0 },
                                                   now: Date(),
-                                                  maxAge: maxAge)?.stabilized(against: claudeQuota, now: Date())
+                                                  maxAge: .infinity)?.stabilized(against: claudeQuota, now: Date())
         claudeQuota = liveLimits
         let origin = await PriceService.shared.origin
         let fetchedAt = await PriceService.shared.lastFetch
@@ -439,62 +401,29 @@ final class UsageStore: ObservableObject {
         checkMilestone(built.combined)
     }
 
-    var isQueryingQuota: Bool { !queryingAccountIDs.isEmpty || probeInFlight || codexProbeInFlight }
+    var isQueryingQuota: Bool { !queryingAccountIDs.isEmpty || codexProbeInFlight }
 
-    /// Opening the panel checks Codex and follows Claude's automatic-query preference.
+    /// Opening the panel checks Codex; the other tools report through their status line.
     func probeNow() {
         guard !isPreview else { return }
         refreshAccounts()
         probeIfDue()
     }
 
-    /// Refresh only the selected account, without enabling future automatic queries.
-    func refreshAccount(_ account: QuotaAccount) {
-        guard !isPreview, !queryingAccountIDs.contains(account.id),
-              let reading = accountQuotas.first(where: { $0.account == account }) else { return }
-        queryAccounts([reading], manual: true)
-    }
-
-    /// Default accounts without readable identities still use their tool's own policy.
-    private func probeIfDue(force: Bool = false, manual: Bool = false) {
-        func due(_ tool: Tool) -> Bool {
-            force || lastDefaultQueries[tool].map { Date().timeIntervalSince($0) >= prefs.queryInterval(for: tool) } ?? true
-        }
-        let queryClaude = (manual || prefs.automaticClaudeQuotaQueries) && due(.claudeCode) && !probeInFlight
-            && !accountQuotas.contains(where: { $0.account.tool == .claudeCode && $0.account.isDefault })
-            && (manual || !ClaudeConfigReader.isFresh(ClaudeConfigReader.read(), maxAge: prefs.quotaInterval))
-        let queryCodex = due(.codex) && !codexProbeInFlight
-            && !accountQuotas.contains(where: { $0.account.tool == .codex && $0.account.isDefault })
-        guard queryClaude || queryCodex else { return }
-        if queryClaude {
-            probeInFlight = true
-            let maxAge = prefs.quotaInterval
-            let query = claudeQuery
-            Task { [weak self] in
-                guard let self else { return }
-                guard manual || self.prefs.automaticClaudeQuotaQueries else {
-                    self.probeInFlight = false
-                    return
-                }
-                self.lastDefaultQueries[.claudeCode] = Date()
-                let probed = await Task.detached(priority: .utility, operation: { query(maxAge) }).value
-                self.probeInFlight = false
-                // /usage writes the actual fetch time into Claude's local cache.
-                guard probed != nil else { return }
-                await self.refresh(scanLogs: false)
-            }
-        }
-        if queryCodex {
-            codexProbeInFlight = true
-            let query = codexQuery
-            Task { [weak self] in
-                guard let self else { return }
-                self.lastDefaultQueries[.codex] = Date()
-                let reading = await Task.detached(priority: .utility, operation: { query() }).value
-                self.codexReading = reading
-                self.codexProbeInFlight = false
-                await self.refresh(scanLogs: false)
-            }
+    /// A default Codex login without a readable identity is still queried on its own schedule.
+    private func probeIfDue() {
+        let due = lastDefaultCodexQuery.map { Date().timeIntervalSince($0) >= prefs.codexQuotaInterval } ?? true
+        guard due, !codexProbeInFlight,
+              !accountQuotas.contains(where: { $0.account.tool == .codex && $0.account.isDefault }) else { return }
+        codexProbeInFlight = true
+        let query = codexQuery
+        Task { [weak self] in
+            guard let self else { return }
+            self.lastDefaultCodexQuery = Date()
+            let reading = await Task.detached(priority: .utility, operation: { query() }).value
+            self.codexReading = reading
+            self.codexProbeInFlight = false
+            await self.refresh(scanLogs: false)
         }
     }
 

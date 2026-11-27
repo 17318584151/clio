@@ -1,14 +1,13 @@
 import Foundation
 import CryptoKit
 
-/// The second source of quota state: what Claude Code and agy hand their status line.
+/// The quota source for Claude Code and agy: what they hand their status line.
 ///
 /// Running this binary as that command (or in front of an existing one) writes
 /// the quota payload where the panel can read it, and forwards stdin to
 /// the wrapped command untouched so an existing status line keeps rendering.
-/// It arrives on every status-line render, which is far more often than the
-/// panel would poll on its own — but it has never carried the model-scoped
-/// window, so it complements the CLI rather than replacing it.
+/// It arrives on every status-line render. Claude Code's payload has never
+/// carried the model-scoped window, which its local cache still supplies.
 enum RateLimitBridge {
     private static func snapshotPath(for accountID: String, support: URL) -> URL {
         let digest = SHA256.hash(data: Data(accountID.utf8)).map { String(format: "%02x", $0) }.joined()

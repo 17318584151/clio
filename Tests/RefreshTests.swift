@@ -30,7 +30,7 @@ enum RefreshTests {
         expect(requests.request(scanLogs: false), "worker restarts")
         expect(requests.next() == false && requests.next() == nil, "next batch drains")
         try startupAccounts(root)
-        try await claudeQueriesDisabled(root)
+        try await statusLineAccounts(root)
         try await dashboard(root)
         try await codexQuota(root)
         try await codexTimingEnrichment(root)
@@ -62,21 +62,11 @@ enum RefreshTests {
     }
 
     @MainActor
-    static func claudeQueriesDisabled(_ root: URL) async throws {
+    static func statusLineAccounts(_ root: URL) async throws {
         let prefs = Preferences.shared
-        let previousAutomatic = prefs.automaticClaudeQuotaQueries
-        let previousClaudeInterval = prefs.quotaInterval
         let previousCodexInterval = prefs.codexQuotaInterval
-        prefs.automaticClaudeQuotaQueries = false
-        prefs.quotaInterval = 900
         prefs.codexQuotaInterval = 1800
-        expect(prefs.queryInterval(for: .claudeCode) == 900 && prefs.queryInterval(for: .codex) == 1800,
-               "Claude and Codex keep independent polling and freshness intervals")
-        defer {
-            prefs.automaticClaudeQuotaQueries = previousAutomatic
-            prefs.quotaInterval = previousClaudeInterval
-            prefs.codexQuotaInterval = previousCodexInterval
-        }
+        defer { prefs.codexQuotaInterval = previousCodexInterval }
         let directory = root.appending(path: "query-account")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let accountID = UUID().uuidString
@@ -96,65 +86,28 @@ enum RefreshTests {
         defaults.set([directory.path, codexDirectory.path], forKey: "accountDirectories")
         defer { defaults.set(previousDirectories, forKey: "accountDirectories") }
         let recorder = QueryRecorder()
-        let manualGate = DispatchSemaphore(value: 0)
         let readers = LogReaders(
             claude: ClaudeCodeReader(root: root.appending(path: "no-claude-logs"), sleepHistory: { SleepTimeline() }),
             codex: CodexReader(root: root.appending(path: "no-codex-logs"), sleepHistory: { SleepTimeline() }),
             antigravity: AntigravityReader(roots: []))
-        let store = UsageStore(readers: readers, accountQuery: { account, _, force in
-            recorder.record(force ? "manual:\(account.id)" : account.tool == .claudeCode ? "automatic-claude" : "automatic-codex")
-            if force { manualGate.wait() }
+        let store = UsageStore(readers: readers, accountQuery: { account in
+            recorder.record("account:\(account.tool.rawValue)")
             return AccountQuota.cached(account)
-        }, claudeQuery: { _ in recorder.record("default-claude"); return nil },
-           codexQuery: { recorder.record("default-codex"); return nil })
+        }, codexQuery: { recorder.record("default-codex"); return nil })
         store.refreshAccounts(force: true)
         store.probeNow()
         await store.refresh(scanLogs: false)
-        try await Task.sleep(nanoseconds: 100_000_000)
-        expect(!recorder.calls.contains("automatic-claude") && !recorder.calls.contains("default-claude"),
-               "disabling Claude automatic queries blocks all automatic Claude entry points")
-        expect(recorder.calls.contains("automatic-codex"), "Codex queries automatically while Claude queries are disabled")
-        expect(store.accountQuotas.first { $0.account.name == "query@example.com" }?.status == "仅本地缓存",
-               "offline accounts show a local-cache status instead of an endless query placeholder")
         for _ in 0..<500 where store.isQueryingQuota { try await Task.sleep(nanoseconds: 10_000_000) }
-        let dashboardUpdatedAt = store.dashboard.updatedAt
-        let claudeAccount = store.accountQuotas.first { $0.account.name == "query@example.com" }!.account
-        let codexAccount = store.accountQuotas.first { $0.account.directory == codexDirectory.standardizedFileURL.resolvingSymlinksInPath() }!.account
-        store.refreshAccount(claudeAccount)
-        store.refreshAccount(claudeAccount)
-        expect(store.queryingAccountIDs == [claudeAccount.id], "only the selected account shows loading")
-        for _ in 0..<100 where !recorder.calls.contains("manual:\(claudeAccount.id)") {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        expect(recorder.calls.filter { $0.hasPrefix("manual:") } == ["manual:\(claudeAccount.id)"],
-               "refreshing one account never manually queries another account")
-        store.refreshAccount(codexAccount)
-        expect(store.queryingAccountIDs == [claudeAccount.id, codexAccount.id],
-               "another account can refresh while the selected account is busy")
-        manualGate.signal()
-        manualGate.signal()
-        for _ in 0..<500 where store.isQueryingQuota { try await Task.sleep(nanoseconds: 10_000_000) }
-        expect(!store.isQueryingQuota && store.queryingAccountIDs.isEmpty, "each account clears its loading state")
-        expect(store.dashboard.updatedAt == dashboardUpdatedAt,
-               "refreshing non-default accounts does not rebuild the dashboard")
-        expect(recorder.calls.filter { $0.hasPrefix("manual:") }.sorted()
-               == ["manual:\(claudeAccount.id)", "manual:\(codexAccount.id)"].sorted(),
-               "manual actions query only selected accounts once; repeated clicks share the running query")
-        expect(!prefs.automaticClaudeQuotaQueries, "manual action never enables automatic querying")
+        expect(recorder.calls.contains("account:codex"), "Codex accounts are queried on their own schedule")
+        expect(!recorder.calls.contains { $0 != "account:codex" && $0 != "default-codex" },
+               "accounts that report through the status line are never queried")
+        expect(store.accountQuotas.first { $0.account.name == "query@example.com" }?.status == "本地缓存",
+               "a Claude account shows its local cache until a push arrives")
         let completedCalls = recorder.calls
         store.probeNow()
         await store.refresh(scanLogs: false)
         try await Task.sleep(nanoseconds: 100_000_000)
-        expect(recorder.calls == completedCalls, "panel opening respects independent query intervals after a manual query")
-
-        prefs.automaticClaudeQuotaQueries = true
-        store.refreshAccounts(force: true)
-        prefs.automaticClaudeQuotaQueries = false
-        for _ in 0..<500 where store.isQueryingQuota { try await Task.sleep(nanoseconds: 10_000_000) }
-        let subsequent = Array(recorder.calls.dropFirst(completedCalls.count))
-        expect(!subsequent.contains("automatic-claude") && !subsequent.contains("default-claude"),
-               "turning off Claude queries prevents queued Claude accounts from launching")
-        expect(subsequent.contains("automatic-codex"), "queued Codex queries continue when Claude queries are turned off")
+        expect(recorder.calls == completedCalls, "panel opening respects the Codex query interval")
 
         store.start()
         let payload = Data(#"{"rate_limits":{"five_hour":{"used_percentage":0},"seven_day":{"used_percentage":29}}}"#.utf8)
@@ -167,9 +120,8 @@ enum RefreshTests {
         }
         let pushed = store.accountQuotas.first { $0.account.name == "query@example.com" }
         expect(pushed?.quota?.sevenDay?.usedPercentage == 29 && pushed?.status == "状态栏推送",
-               "the watched feed refreshes the matching card without a manual query or timer tick")
-        expect(!recorder.calls.contains("automatic-claude") && !recorder.calls.contains("default-claude"),
-               "receiving status-line quota does not turn on Claude queries")
+               "the watched feed refreshes the matching card without a query or timer tick")
+        expect(recorder.calls == completedCalls, "receiving status-line quota triggers no query")
     }
 
     @MainActor

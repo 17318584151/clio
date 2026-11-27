@@ -104,14 +104,13 @@ struct AccountQuota: Identifiable {
     var status: String
     var id: String { account.id }
 
-    func displayedFraction(_ window: RateLimitWindow, now: Date = Date(),
-                           automaticClaudeQueries: Bool, queryInterval: TimeInterval) -> Double? {
-        // Pushed quotas arrive only while the tool runs, so they hold until their window resets.
-        if account.tool == .antigravity || (account.tool == .claudeCode && !automaticClaudeQueries) {
-            return window.isCurrent(at: now) ? window.fraction : nil
-        }
-        let valid = quota.map { now.timeIntervalSince($0.updatedAt) < queryInterval * 2 } ?? false
-        return valid && window.isCurrent(at: now) ? window.fraction : nil
+    /// Pushed and cached quotas arrive only while the tool runs, so they hold until
+    /// their window resets. Codex readings also lapse after two query intervals.
+    func displayedFraction(_ window: RateLimitWindow, now: Date = Date(), codexQueryInterval: TimeInterval) -> Double? {
+        guard window.isCurrent(at: now) else { return nil }
+        guard account.tool == .codex else { return window.fraction }
+        let valid = quota.map { now.timeIntervalSince($0.updatedAt) < codexQueryInterval * 2 } ?? false
+        return valid ? window.fraction : nil
     }
 
     static func cached(_ account: QuotaAccount, support: URL = AppPaths.support) -> AccountQuota {
@@ -125,34 +124,15 @@ struct AccountQuota: Identifiable {
             quota: quota,
             plan: account.tool == .claudeCode ? data.flatMap(PlanReader.parse) : nil,
             status: pushed ? "状态栏推送" : quota != nil ? "本地缓存"
-                : account.tool == .antigravity ? "尚未推送" : "尚未查询")
+                : account.tool == .codex ? "尚未查询" : "尚未推送")
     }
 
-    static func fetch(_ account: QuotaAccount, maxAge: TimeInterval = 1800, now: Date = Date(),
-                      force: Bool = false) -> AccountQuota {
-        switch account.tool {
-        case .claudeCode:
-            let local = cached(account)
-            if !force, ClaudeConfigReader.isFresh(local.quota, maxAge: maxAge, now: now) { return local }
-            let result = UsageProbe.fetch(configDirectory: account.isDefault ? nil : account.directory, maxAge: maxAge)
-            var reading = cached(account)
-            if result == nil {
-                if reading.status == "状态栏推送", ClaudeConfigReader.isFresh(reading.quota, maxAge: maxAge) {
-                    return reading
-                }
-                reading.quota = nil
-                reading.status = "查询失败"
-            } else if reading.status != "状态栏推送" {
-                reading.status = "已查询"
-            }
-            return reading
-        case .antigravity:
-            return cached(account)
-        case .codex:
-            let result = CodexUsageProbe.fetch(configDirectory: account.directory)
-            return AccountQuota(account: account, quota: result?.quota, plan: result?.plan,
-                                remainingResets: result?.remainingResets,
-                                status: result == nil ? "查询失败" : "已查询")
-        }
+    /// Only Codex is queried; the other tools report through their status line.
+    static func fetch(_ account: QuotaAccount) -> AccountQuota {
+        guard account.tool == .codex else { return cached(account) }
+        let result = CodexUsageProbe.fetch(configDirectory: account.directory)
+        return AccountQuota(account: account, quota: result?.quota, plan: result?.plan,
+                            remainingResets: result?.remainingResets,
+                            status: result == nil ? "查询失败" : "已查询")
     }
 }
