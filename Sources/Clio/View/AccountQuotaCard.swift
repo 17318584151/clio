@@ -38,19 +38,14 @@ private struct AccountQuotaRow: View {
     /// agy only reports quota through its status line; there is nothing to query.
     private var canRefresh: Bool { reading.account.tool != .antigravity }
 
-    /// The address is in the tooltip; the shared domain only crowds the row.
-    private var shortName: String {
-        String(reading.account.name.split(separator: "@").first ?? Substring(reading.account.name))
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
                 BrandIcon(tool: reading.account.tool, size: 14,
                           color: reading.account.tool.brandColor ?? theme.textPrimary)
-                Text(shortName)
+                Text(reading.account.name)
                     .font(.system(size: 11, weight: .medium))
-                    .lineLimit(1).truncationMode(.tail)
+                    .lineLimit(1).truncationMode(.middle)
                 if isOrca { tag("Orca", color: theme.accent) }
                 if let plan = reading.plan { tag(plan, color: theme.badgeText) }
                 Spacer(minLength: 6)
