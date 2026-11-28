@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$root/build"
-swiftc -swift-version 5 -o "$root/build/quota-ring-tests" \
+swiftc -swift-version 5 -o "$root/build/quota-bar-tests" \
     "$root/Sources/Clio/Model/Usage.swift" \
     "$root/Sources/Clio/Model/Pricing.swift" \
     "$root/Sources/Clio/Model/RateLimits.swift" \
@@ -13,4 +13,4 @@ swiftc -swift-version 5 -o "$root/build/quota-ring-tests" \
     "$root/Sources/Clio/View/Theme.swift" \
     "$root/Sources/Clio/View/MenuBarQuotaLabel.swift" \
     "$root/Tests/MenuBarQuotaTests.swift"
-"$root/build/quota-ring-tests"
+"$root/build/quota-bar-tests"

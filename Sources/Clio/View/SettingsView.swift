@@ -183,7 +183,7 @@ struct SettingsContent: View {
                                           showsPercentages: prefs.menuBarDisplay.showsQuotaPercentages,
                                           tokenText: prefs.menuBarDisplay.todayTokenText(store.dashboard))
                     }
-                    .help("外圈 5 小时 · 内圈本周")
+                    .help("上方 5 小时 · 下方本周")
                 }
                 row("主题色") {
                     HStack(spacing: 8) {
@@ -237,7 +237,7 @@ struct SettingsContent: View {
                     .controlSize(.small)
                     .fixedSize()
                 }
-                .help("刷新本地用量与日志中的额度快照，菜单栏圆环随新的额度数据更新")
+                .help("刷新本地用量与日志中的额度快照，菜单栏额度横杠随新的额度数据更新")
                 row("Codex 查询频率") {
                     Picker("", selection: $prefs.codexQuotaInterval) {
                         Text("每 15 分钟").tag(900.0)

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Used quota of one account: 5-hour window on the outer ring, weekly on the inner ring.
+/// Used quota of one account: 5-hour window on the top bar, weekly on the bottom bar.
 struct MenuBarQuotaLabel: View {
     var fiveHourFraction: Double?
     var weekFraction: Double?
@@ -19,9 +19,9 @@ struct MenuBarQuotaLabel: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            ZStack {
-                ring(fiveHourFraction, size: 16)
-                ring(weekFraction, size: 9)
+            VStack(spacing: 3) {
+                bar(fiveHourFraction)
+                bar(weekFraction)
             }
             if showsPercentages {
                 percentage(fiveHourFraction)
@@ -45,21 +45,21 @@ struct MenuBarQuotaLabel: View {
         }
     }
 
-    private func ring(_ usedFraction: Double?, size: CGFloat) -> some View {
-        ZStack {
-            Circle()
-                .stroke(foreground.opacity(0.22), lineWidth: 1.5)
-            if let usedFraction {
-                Circle()
-                    .trim(from: 0, to: min(1, max(0, usedFraction)))
-                    // Flat endpoints keep the visible arc within its quota proportion.
-                    .stroke(color(for: Self.usedPercent(usedFraction)),
-                            style: StrokeStyle(lineWidth: 1.5, lineCap: .butt))
-                    .rotationEffect(.degrees(-90))
+    private func bar(_ usedFraction: Double?) -> some View {
+        Capsule()
+            .fill(foreground.opacity(0.22))
+            .overlay(alignment: .leading) {
+                if let usedFraction {
+                    GeometryReader { proxy in
+                        Rectangle()
+                            .fill(color(for: Self.usedPercent(usedFraction)))
+                            .frame(width: proxy.size.width * min(1, max(0, usedFraction)))
+                    }
+                }
             }
-        }
-        .padding(0.75)
-        .frame(width: size, height: size)
+            // Clipping to the track keeps short fills inside its rounded ends.
+            .clipShape(Capsule())
+            .frame(width: 18, height: 3)
     }
 
     private func percentage(_ usedFraction: Double?) -> some View {

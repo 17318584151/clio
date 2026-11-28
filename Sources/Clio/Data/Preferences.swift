@@ -16,10 +16,10 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
         switch self {
         case .iconOnly: return "仅图标"
         case .iconAndTodayTokens: return "图标 + 今日 Token 数"
-        case .dualQuota: return "双环"
-        case .dualQuotaPercent: return "双环 + 百分比"
-        case .dualQuotaAndTodayTokens: return "双环 + Token（合并显示）"
-        case .dualQuotaAndSeparateTodayTokens: return "双环 + Token（分开显示）"
+        case .dualQuota: return "双横杠"
+        case .dualQuotaPercent: return "双横杠 + 百分比"
+        case .dualQuotaAndTodayTokens: return "双横杠 + Token（合并显示）"
+        case .dualQuotaAndSeparateTodayTokens: return "双横杠 + Token（分开显示）"
         }
     }
 

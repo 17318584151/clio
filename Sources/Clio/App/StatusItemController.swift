@@ -99,7 +99,7 @@ final class StatusItemController {
         let renderer = ImageRenderer(content: label)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let image = renderer.nsImage else { return }
-        // The app icon retains its colors; quota rings use their threshold colors.
+        // The app icon retains its colors; quota bars use their threshold colors.
         image.isTemplate = false
         button.image = image
     }
@@ -114,6 +114,6 @@ final class StatusItemController {
             }
             return line
         }
-        return "\(account.account.name)（外圈 5 小时 · 内圈本周）\n" + lines.joined(separator: "\n")
+        return "\(account.account.name)（上方 5 小时 · 下方本周）\n" + lines.joined(separator: "\n")
     }
 }

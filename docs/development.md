@@ -51,7 +51,7 @@ bash Scripts/package.sh
 | `bash Scripts/test-model-speed.sh` | 速度开关保存恢复、原生控件布局、数值基线及名称截断提示 |
 | `bash Scripts/test-usage.sh` | 历史每日记录恢复、日志读取、计时补全、休眠扣除、双来源额度冲突、窗口重置、用量聚合及里程碑 |
 | `bash Scripts/test-codex-usage.sh` | Codex 额度与重置次数、登录状态、只读协议及超时 |
-| `bash Scripts/test-quota-ring.sh` | 菜单栏额度比例 |
+| `bash Scripts/test-quota-bar.sh` | 菜单栏额度比例 |
 | `bash Scripts/test-menubar.sh` | 菜单栏资源与截图 |
 | `bash Scripts/test-ccusage-alignment.sh` | 日志去重、累计差值及周一边界 |
 | `bash Scripts/test-codex-helper.sh` | 辅助服务安装、修复、升级、移除与回滚 |
