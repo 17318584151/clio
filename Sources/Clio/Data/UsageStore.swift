@@ -180,6 +180,8 @@ final class UsageStore: ObservableObject {
     @Published private(set) var switchingAccountID: String?
     @Published private(set) var switchErrors: [String: String] = [:]
     private var lastOrcaLoad: Date?
+    /// Bumped per Orca read so a slower, older read can't overwrite a newer one.
+    private var orcaLoadGeneration = 0
     private var lastAccountQueries: [String: Date] = [:]
     private var lastDefaultCodexQuery: Date?
     private let accountQuery: @Sendable (QuotaAccount) -> AccountQuota
@@ -231,13 +233,17 @@ final class UsageStore: ObservableObject {
 
     /// Selections made in Orca itself show up within a minute.
     private func loadOrcaIfDue(force: Bool = false) {
-        guard force || lastOrcaLoad.map({ Date().timeIntervalSince($0) >= 60 }) ?? true,
+        guard switchingAccountID == nil,
+              force || lastOrcaLoad.map({ Date().timeIntervalSince($0) >= 60 }) ?? true,
               OrcaAccounts.executable != nil else { return }
         lastOrcaLoad = Date()
+        orcaLoadGeneration += 1
+        let generation = orcaLoadGeneration
         let accounts = accountQuotas.map(\.account)
         Task { [weak self] in
             let state = await Task.detached(priority: .utility) { OrcaAccounts.load(accounts: accounts) }.value
-            self?.orca = state
+            guard let self, generation == self.orcaLoadGeneration else { return }
+            self.orca = state
         }
     }
 
@@ -254,6 +260,7 @@ final class UsageStore: ObservableObject {
         guard switchingAccountID == nil, let target = orca?.targets[account.id] else { return }
         switchingAccountID = account.id
         switchErrors[account.id] = nil
+        orcaLoadGeneration += 1
         let accounts = accountQuotas.map(\.account)
         Task { [weak self] in
             let (error, state) = await Task.detached(priority: .userInitiated) {
