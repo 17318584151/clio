@@ -288,7 +288,7 @@ final class UsageStore: ObservableObject {
                     self.accountQuotas[index] = reading
                 }
                 if account.isDefault {
-                    self.codexReading = .init(quota: reading.quota, plan: reading.plan, remainingResets: reading.remainingResets)
+                    self.codexReading = .init(quota: reading.quota, remainingResets: reading.remainingResets)
                     await self.rebuildDashboard(scanLogs: false)
                 }
                 self.queryingAccountIDs.remove(account.id)
