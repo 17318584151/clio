@@ -53,7 +53,7 @@ final class Updater: ObservableObject {
     static let currentVersion =
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
 
-    private static let repository = "UreMySunshine/clio"
+    private static let repository = "17318584151/clio"
     private static let endpoint = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
     static let releasesPage = URL(string: "https://github.com/\(repository)/releases")!
     private static let checkInterval: TimeInterval = 24 * 3600

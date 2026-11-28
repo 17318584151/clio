@@ -5,7 +5,7 @@
 需要 Apple Silicon Mac 和 Apple Command Line Tools。构建脚本直接调用 Swift 编译器，生成应用包及原生 CodexHelper，并将辅助程序资源打包至应用内。
 
 ```bash
-git clone https://github.com/UreMySunshine/clio.git
+git clone https://github.com/17318584151/clio.git
 cd clio
 bash Scripts/build.sh
 ```

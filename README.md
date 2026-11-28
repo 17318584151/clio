@@ -4,7 +4,7 @@
   <p><strong>在菜单栏，掌握编程助手的用量。</strong></p>
   <p>面向 macOS 的 Claude Code 与 Codex 用量工具<br>查看订阅额度、使用趋势、模型费用与每日活跃。</p>
   <p>
-    <a href="https://github.com/UreMySunshine/clio/releases">下载应用</a> ·
+    <a href="https://github.com/17318584151/clio/releases">下载应用</a> ·
     <a href="#快速开始">快速开始</a> ·
     <a href="#核心功能">核心功能</a> ·
     <a href="#从源码构建">从源码构建</a>
@@ -37,7 +37,7 @@
 
 **系统要求：搭载 Apple Silicon 芯片的 Mac，macOS 14 或更高版本。** 当前安装包不支持 Intel Mac。
 
-1. 从 [GitHub Releases](https://github.com/UreMySunshine/clio/releases) 下载磁盘映像（DMG）。
+1. 从 [GitHub Releases](https://github.com/17318584151/clio/releases) 下载磁盘映像（DMG）。
 2. 打开安装包，将 Clio 拖入「应用程序」。
 3. 启动 Clio，点击菜单栏图标查看用量面板。
 
