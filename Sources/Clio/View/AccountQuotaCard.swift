@@ -53,7 +53,6 @@ private struct AccountQuotaRow: View {
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(1).truncationMode(.middle)
                 if isOrca { tag("Orca", color: theme.accent) }
-                if let plan = reading.plan { tag(plan, color: theme.badgeText) }
                 Spacer(minLength: 6)
                 trailing
             }

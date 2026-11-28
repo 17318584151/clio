@@ -24,7 +24,7 @@ enum DesignSample {
                 quota: .init(updatedAt: now.addingTimeInterval(Double(-120 - index * 180)),
                     fiveHour: tool != .codex ? .init(usedPercentage: fiveHour, resetsAt: now.addingTimeInterval(7200)) : nil,
                     sevenDay: .init(usedPercentage: week, resetsAt: reset), modelScoped: []),
-                plan: [.claudeCode: "Max 5×", .codex: "Pro 20×"][tool], status: "本地缓存")
+                status: "本地缓存")
         }
     }
 

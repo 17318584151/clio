@@ -86,7 +86,6 @@ struct QuotaAccount: Identifiable, Equatable {
 struct AccountQuota: Identifiable {
     var account: QuotaAccount
     var quota: RateLimitSnapshot?
-    var plan: String?
     var remainingResets: Int?
     var status: String
     var id: String { account.id }
@@ -117,7 +116,6 @@ struct AccountQuota: Identifiable {
         let quota = pushed ? feed?.stabilized(against: cache, now: Date()) : cache
         return AccountQuota(account: account,
             quota: quota,
-            plan: account.tool == .claudeCode ? data.flatMap(PlanReader.parse) : nil,
             status: pushed ? "状态栏推送" : quota != nil ? "本地缓存"
                 : account.tool == .codex ? "尚未查询" : "尚未推送")
     }
@@ -126,7 +124,7 @@ struct AccountQuota: Identifiable {
     static func fetch(_ account: QuotaAccount) -> AccountQuota {
         guard account.tool == .codex else { return cached(account) }
         let result = CodexUsageProbe.fetch(configDirectory: account.directory)
-        return AccountQuota(account: account, quota: result?.quota, plan: result?.plan,
+        return AccountQuota(account: account, quota: result?.quota,
                             remainingResets: result?.remainingResets,
                             status: result == nil ? "查询失败" : "已查询")
     }
