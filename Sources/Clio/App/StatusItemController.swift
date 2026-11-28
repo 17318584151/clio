@@ -109,7 +109,7 @@ final class StatusItemController {
         let lines = [("5 小时", \RateLimitSnapshot.fiveHour), ("本周", \.sevenDay)].map { title, window in
             let used = MenuBarQuotaLabel.usedPercent(account.fraction(window)).map { "\($0)%" } ?? "—"
             var line = "\(title)已用 \(used)"
-            if let reset = account.quota?[keyPath: window]?.resetsAt {
+            if let reset = account.resetDate(window) {
                 line += "\n重置：\(reset.formatted(date: .abbreviated, time: .shortened))"
             }
             return line

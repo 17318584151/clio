@@ -120,8 +120,8 @@ private struct AccountQuotaRow: View {
         else if reading.account.tool != .codex {
             lines.append("在设置中接入状态栏后，运行 \(reading.account.tool == .antigravity ? "agy" : "Claude Code") 即可更新")
         }
-        for (title, window) in [("5 小时", reading.quota?.fiveHour), ("本周", reading.quota?.sevenDay)] {
-            if let reset = window?.resetsAt { lines.append("\(title)重置于 \(Format.stamp(reset))") }
+        for (title, window) in [("5 小时", \RateLimitSnapshot.fiveHour), ("本周", \.sevenDay)] {
+            if let reset = reading.resetDate(window) { lines.append("\(title)重置于 \(Format.stamp(reset))") }
         }
         if let count = reading.remainingResets { lines.append("剩余重置次数 \(count) 次") }
         lines.append(reading.account.directory.path)
@@ -129,7 +129,7 @@ private struct AccountQuotaRow: View {
     }
 
     private func window(_ title: String, _ window: KeyPath<RateLimitSnapshot, RateLimitWindow?>) -> some View {
-        let value = reading.quota?[keyPath: window]
+        let reset = reading.resetDate(window)
         let used = reading.fraction(window)
         return VStack(spacing: 4) {
             HStack(spacing: 4) {
@@ -147,7 +147,7 @@ private struct AccountQuotaRow: View {
                     }
             }
             .frame(height: 3)
-            Text(value?.resetsAt.map { $0 > Date() ? "\(Format.reset($0))重置" : "已重置，待更新" } ?? "重置时间未知")
+            Text(reset.map { $0 > Date() ? "\(Format.reset($0))重置" : "已重置，待更新" } ?? "重置时间未知")
                 .font(.system(size: 9)).monospacedDigit()
                 .foregroundStyle(theme.textSecondary)
                 .lineLimit(1).minimumScaleFactor(0.85)

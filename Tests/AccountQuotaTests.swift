@@ -175,10 +175,20 @@ enum AccountQuotaTests {
                      "Claude keeps old percentages until the window resets")
         precondition(oldQuota.displayedFraction(oldQuota.quota!.fiveHour!, now: now, codexQueryInterval: 900) == nil,
                      "an expired window is cleared without requesting an update")
+        let week: TimeInterval = 7 * 86400
+        var lapsed = oldQuota
+        lapsed.quota?.sevenDay?.resetsAt = now.addingTimeInterval(-2 * week - 3600)
+        precondition(lapsed.resetDate(\.sevenDay, now: now) == now.addingTimeInterval(week - 3600),
+                     "a passed Claude weekly reset rolls forward to the next week")
+        precondition(lapsed.resetDate(\.fiveHour, now: now) == now.addingTimeInterval(-3600),
+                     "the 5-hour window starts with use, so its passed reset is not projected")
         var codexQuota = oldQuota
         codexQuota.account = accounts.first { $0.tool == .codex }!
         precondition(codexQuota.displayedFraction(oldQuota.quota!.sevenDay!, now: now, codexQueryInterval: 900) == nil,
                      "Codex readings still lapse after two query intervals")
+        codexQuota.quota = lapsed.quota
+        precondition(codexQuota.resetDate(\.sevenDay, now: now) == lapsed.quota?.sevenDay?.resetsAt,
+                     "Codex weekly windows are not projected")
         precondition(oldQuota.displayedFraction(RateLimitWindow(), now: now, codexQueryInterval: 900) == nil,
                      "a genuinely missing percentage remains unknown")
         var missing = claude("second", 4)

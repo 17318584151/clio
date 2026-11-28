@@ -15,6 +15,13 @@ struct RateLimitWindow: Codable, Equatable {
     func isCurrent(at now: Date) -> Bool {
         resetsAt.map { $0 > now } ?? true
     }
+
+    /// The first reset after `now` for a window that recurs every `period`,
+    /// rolling a passed reset forward by whole periods.
+    func nextReset(after now: Date, period: TimeInterval) -> Date? {
+        guard let resetsAt, resetsAt <= now else { return resetsAt }
+        return resetsAt.addingTimeInterval(((now.timeIntervalSince(resetsAt) / period).rounded(.down) + 1) * period)
+    }
 }
 
 /// A model-scoped weekly allowance, e.g. the Fable window.

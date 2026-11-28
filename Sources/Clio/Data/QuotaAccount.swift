@@ -100,6 +100,14 @@ struct AccountQuota: Identifiable {
         return valid ? window.fraction : nil
     }
 
+    /// Claude's weekly allowance resets at the same time every week, so a passed
+    /// reset still tells when the next one falls. Other windows start with use.
+    func resetDate(_ window: KeyPath<RateLimitSnapshot, RateLimitWindow?>, now: Date = Date()) -> Date? {
+        guard let value = quota?[keyPath: window] else { return nil }
+        guard account.tool == .claudeCode, window == \.sevenDay else { return value.resetsAt }
+        return value.nextReset(after: now, period: 7 * 24 * 3600)
+    }
+
     static func cached(_ account: QuotaAccount, support: URL = AppPaths.support) -> AccountQuota {
         let data = try? Data(contentsOf: account.profile)
         let cache = account.tool == .claudeCode ? data.flatMap(ClaudeConfigReader.parse) : nil
